@@ -6,21 +6,28 @@
  * Usage (all arguments optional):
  *   node deploy.mjs [target-dir] [--name "Site name"] [--url https://...]
  *       [--description "One-liner"] [--port 3000] [--mcp-port 3456]
- *       [--skip-install] [--sample]
+ *       [--skip-install] [--sample] [--foreground]
  *
  * Identity resolution: --name/--url/--description flags, else the
  * SITE_TITLE/SITE_URL/SITE_DESCRIPTION env vars, else generic defaults.
  * target-dir defaults to ./agentic-blog-site.
  *
+ * By default deploy.mjs EXITS after printing the connection card — the site
+ * and MCP servers keep running in the background (their output goes to
+ * <target>/site.log and <target>/mcp.log; stop them with the printed kill
+ * command). This is what lets an agent run deploy as a background task and
+ * get a completion notification. Pass --foreground to keep the servers
+ * attached to the terminal instead (Ctrl+C stops both).
+ *
  * Steps: scaffold via create-blog.mjs (or reuse an existing scaffold) →
  * npm install (site + mcp-server, unless --skip-install) → build → start the
  * site → start the MCP server → wait for readiness → print connection
- * details. Foreground process manager: Ctrl+C stops both servers.
+ * details.
  *
  * Zero dependencies — Node 24 only.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, openSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -91,22 +98,24 @@ async function waitForHttp(url, timeoutMs = 60_000, isDead = () => false) {
   return false;
 }
 
-function waitForLine(stream, needle, timeoutMs = 30_000) {
+function waitForFileLine(filePath, needle, timeoutMs = 30_000) {
   return new Promise((resolve) => {
-    let buffer = '';
-    const timer = setTimeout(() => {
-      stream.off('data', onData);
-      resolve(false);
-    }, timeoutMs);
-    function onData(chunk) {
-      buffer += chunk.toString();
-      if (buffer.includes(needle)) {
-        clearTimeout(timer);
-        stream.off('data', onData);
-        resolve(true);
+    const start = Date.now();
+    const timer = setInterval(() => {
+      try {
+        if (readFileSync(filePath, 'utf8').includes(needle)) {
+          clearInterval(timer);
+          resolve(true);
+          return;
+        }
+      } catch {
+        // log file may not exist yet
       }
-    }
-    stream.on('data', onData);
+      if (Date.now() - start > timeoutMs) {
+        clearInterval(timer);
+        resolve(false);
+      }
+    }, 300);
   });
 }
 
@@ -119,6 +128,7 @@ async function main() {
   const mcpPort = Number(flags['mcp-port'] ?? 3456);
   const skipInstall = flags['skip-install'] === true || flags['skip-install'] === '1';
   const sample = flags.sample === true || flags.sample === '1';
+  const foreground = flags.foreground === true || flags.foreground === '1';
 
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     console.error(`--port must be an integer between 1 and 65535 (got "${flags.port}").`);
@@ -177,21 +187,23 @@ async function main() {
   console.log('Building ...');
   run('npm', ['run', 'build'], { cwd: targetResolved });
 
-  // 4. Start the site.
+  // 4. Start the site (output → <target>/site.log).
+  const siteLog = path.join(targetResolved, 'site.log');
+  const siteOut = openSync(siteLog, 'a');
   console.log(`Starting site on http://localhost:${port} ...`);
   let siteExited = false;
   const site = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '-p', String(port)], {
     cwd: targetResolved,
     env: { ...process.env, CONTENT_API_TOKEN: apiToken },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', siteOut, siteOut],
   });
-  site.stdout.on('data', (d) => process.stdout.write(d));
-  site.stderr.on('data', (d) => process.stderr.write(d));
   site.on('exit', () => {
     siteExited = true;
   });
 
-  // 5. Start the MCP server.
+  // 5. Start the MCP server (output → <target>/mcp.log).
+  const mcpLog = path.join(targetResolved, 'mcp.log');
+  const mcpOut = openSync(mcpLog, 'a');
   const mcpToken = randomBytes(32).toString('hex');
   console.log(`Starting MCP server on http://127.0.0.1:${mcpPort}/mcp ...`);
   const mcp = spawn(process.execPath, ['src/index.js'], {
@@ -204,15 +216,8 @@ async function main() {
       MCP_HOST: '127.0.0.1',
       MCP_PORT: String(mcpPort),
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', mcpOut, mcpOut],
   });
-  mcp.stdout.on('data', (d) => process.stdout.write(d));
-  mcp.stderr.on('data', (d) => process.stderr.write(d));
-
-  // Attach the readiness listener immediately — the MCP server can print its
-  // "listening" line before the site-readiness poll below finishes, and a
-  // late-attached listener would miss it.
-  const mcpReady = waitForLine(mcp.stdout, 'listening');
 
   // 6. Wait for readiness.
   const siteUp = await waitForHttp(`http://localhost:${port}`, 60_000, () => siteExited);
@@ -222,7 +227,7 @@ async function main() {
     mcp.kill();
     process.exit(1);
   }
-  const mcpUp = await mcpReady;
+  const mcpUp = await waitForFileLine(mcpLog, 'listening');
   if (!mcpUp) {
     console.error('MCP server did not become ready.');
     site.kill();
@@ -238,24 +243,36 @@ async function main() {
   console.log(`API token: ${apiToken}`);
   console.log(`MCP:       http://127.0.0.1:${mcpPort}/mcp`);
   console.log(`MCP token: ${mcpToken}`);
+  console.log(`Site PID:  ${site.pid}`);
+  console.log(`MCP PID:   ${mcp.pid}`);
+  console.log(`Logs:      ${siteLog}, ${mcpLog}`);
   console.log('');
   console.log('Connect your MCP client to the MCP URL with the MCP token — tools are');
   console.log('auto-discovered via tools/list (publish_article, update_site_config, ...).');
-  console.log('Site identity is configured from --name/--url/--description; theme and');
-  console.log('content are managed through the API or MCP tools. Ctrl+C stops both servers.');
+  console.log('Site identity is configured from SITE_TITLE/SITE_URL/SITE_DESCRIPTION (or');
+  console.log('--name/--url/--description); theme and content are managed through the API');
+  console.log('or MCP tools.');
 
-  // 8. Cleanup on exit.
-  const cleanup = () => {
-    console.log('\nStopping servers ...');
-    site.kill();
-    mcp.kill();
+  if (foreground) {
+    // Foreground mode: keep the servers attached; Ctrl+C stops both.
+    console.log('Foreground mode: Ctrl+C stops both servers.');
+    const cleanup = () => {
+      console.log('\nStopping servers ...');
+      site.kill();
+      mcp.kill();
+      process.exit(0);
+    };
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+    await new Promise(() => {});
+  } else {
+    // Detach (default): exit cleanly — the servers keep running in the
+    // background, writing to their log files. This lets an agent run deploy
+    // as a background task and receive a completion notification.
+    console.log('Servers run in the background. Stop them with:');
+    console.log(`  kill ${site.pid} ${mcp.pid}`);
     process.exit(0);
-  };
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
-
-  // Keep the process alive (foreground process manager).
-  await new Promise(() => {});
+  }
 }
 
 // Run only when invoked directly (not when imported by tests).

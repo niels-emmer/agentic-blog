@@ -27,6 +27,8 @@ let deploy: ChildProcess;
 let deployOutput = '';
 let apiToken = '';
 let mcpToken = '';
+let sitePid = 0;
+let mcpPid = 0;
 
 function run(cmd: string, args: string[], opts: { cwd: string; timeout?: number }) {
   return execFileSync(cmd, args, {
@@ -86,13 +88,30 @@ before(async () => {
   // 4. Parse the connection card.
   const apiMatch = deployOutput.match(/API token: ([0-9a-f]{64})/);
   const mcpMatch = deployOutput.match(/MCP token: ([0-9a-f]{64})/);
+  const sitePidMatch = deployOutput.match(/Site PID:\s+(\d+)/);
+  const mcpPidMatch = deployOutput.match(/MCP PID:\s+(\d+)/);
   assert.ok(apiMatch, 'connection card must include the API token');
   assert.ok(mcpMatch, 'connection card must include the MCP token');
+  assert.ok(sitePidMatch, 'connection card must include the site PID');
+  assert.ok(mcpPidMatch, 'connection card must include the MCP PID');
   apiToken = apiMatch[1];
   mcpToken = mcpMatch[1];
+  sitePid = Number(sitePidMatch[1]);
+  mcpPid = Number(mcpPidMatch[1]);
 });
 
 after(() => {
+  // deploy.mjs exits after printing the card (detach mode) — the servers
+  // keep running in the background, so stop them by PID.
+  for (const pid of [sitePid, mcpPid]) {
+    if (pid > 0) {
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        // already gone
+      }
+    }
+  }
   deploy?.kill();
   rmSync(tempRoot, { recursive: true, force: true });
 });

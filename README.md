@@ -105,13 +105,23 @@ OpenAPI:   http://localhost:3000/openapi.json
 API token: <64-hex>
 MCP:       http://127.0.0.1:3456/mcp
 MCP token: <64-hex>
+Site PID:  <pid>
+MCP PID:   <pid>
+Logs:      <target>/site.log, <target>/mcp.log
 ```
+
+`deploy.mjs` **exits after printing the card** — the servers keep running in
+the background (stop them with `kill <site-pid> <mcp-pid>`, or pass
+`--foreground` to keep them attached to the terminal with Ctrl+C). This is
+what lets an agent run deploy as a background task and receive a completion
+notification.
 
 The agent then connects its MCP client to the MCP URL with the MCP token —
 tools are auto-discovered via `tools/list` (`publish_article`,
 `update_site_config`, ...). Site identity is already configured from
-`--name`/`--url`/`--description`; theme and content are managed through the
-API or MCP tools. Ctrl+C stops both servers.
+`SITE_TITLE`/`SITE_URL`/`SITE_DESCRIPTION` (or `--name`/`--url`/
+`--description`); theme and content are managed through the API or MCP
+tools.
 
 Requires Node 22.5+ (Node 24 recommended). For a public URL, front the site
 with a proxy or tunnel (nginx, Caddy, Cloudflare) — the MCP server binds
