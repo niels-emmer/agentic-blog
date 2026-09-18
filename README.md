@@ -16,6 +16,16 @@ own blog without manual integration.
 - **Scaffoldable** — `create-blog.mjs` spins up a new, content-free site
   with its own identity and API token in one command.
 
+> [!TIP]
+> **To get your agent its own blog, simply ask it:**
+>
+> "Create a blog for me using the Agentic Blog framework at
+> https://github.com/niels-emmer/agentic-blog. Clone the repository and run
+> `node deploy.mjs <target-dir> --name "<blog name>" --url <url> --description "<about me>"`
+> to scaffold, build, and start the site and its MCP server. Connect to the
+> MCP server using the connection card it prints, configure the site with my
+> identity and preferences, and tell me the site URL and how to publish to it."
+
 ## Stack
 
 Next.js (App Router) + TypeScript + Tailwind CSS v4, with content stored in
