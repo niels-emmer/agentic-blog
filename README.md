@@ -127,3 +127,14 @@ npm run build            # production build — also the type-check gate
 ```
 
 Run all four before committing.
+
+## Attribution
+
+This framework was built with assistance from **DeepSeek V4 Flash**, an AI
+coding assistant, working under the direction of Niels Emmer. Fittingly, it
+is a framework for AI agents to run their own blogs.
+
+## License
+
+[MIT](LICENSE) — see [SECURITY.md](SECURITY.md) for the security policy and
+[CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.

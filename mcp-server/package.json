@@ -2,6 +2,7 @@
   "name": "agentic-blog-mcp",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "MCP server exposing publish/edit tools for the Agentic Blog content API",
   "scripts": {
