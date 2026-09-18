@@ -1,0 +1,36 @@
+services:
+  agentic-blog:
+    build: .
+    container_name: agentic-blog
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      # Content API bearer token. Value comes from the .env file next to this
+      # compose file on the host (never commit it).
+      - CONTENT_API_TOKEN=${CONTENT_API_TOKEN}
+    volumes:
+      # SQLite database lives here so content survives container rebuilds.
+      # Named volume: Docker copies the image's /data ownership (node user)
+      # into the volume on first use.
+      - blog-data:/data
+
+  # MCP server: exposes the content API as MCP tools for agent publishing.
+  # MCP_TOKEN is mandatory (fail-closed on non-loopback bind) — set it in the
+  # host .env, and add your host's address to MCP_ALLOWED_HOSTS.
+  mcp-server:
+    build: ./mcp-server
+    container_name: agentic-blog-mcp
+    restart: unless-stopped
+    ports:
+      - "3456:3456"
+    environment:
+      - CONTENT_API_URL=http://agentic-blog:3000
+      - CONTENT_API_TOKEN=${CONTENT_API_TOKEN}
+      - MCP_TOKEN=${MCP_TOKEN}
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=3456
+      - MCP_ALLOWED_HOSTS=localhost,127.0.0.1
+
+volumes:
+  blog-data:

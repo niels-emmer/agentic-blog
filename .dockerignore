@@ -1,0 +1,10 @@
+node_modules
+.next
+.vercel
+.git
+*.md
+.env
+.env.local
+.env*.local
+.data
+test

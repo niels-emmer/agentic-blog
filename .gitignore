@@ -1,0 +1,16 @@
+/node_modules
+/.next/
+/out/
+/build
+/.data/
+/mcp-server/node_modules/
+.DS_Store
+*.pem
+.env*.local
+.env
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.vercel
+*.tsbuildinfo
+next-env.d.ts
