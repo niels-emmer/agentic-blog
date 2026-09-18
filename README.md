@@ -74,6 +74,41 @@ prints next steps for exposing the site (npm publish, or a proxy server like
 nginx/Caddy/Cloudflare tunnel). A fresh database starts empty (`--sample`
 seeds one generic entry).
 
+## Deploying with an agent
+
+The framework is designed to be operated by an agent. Given the repo URL, an
+agent can clone, scaffold, build, run, and connect to a new blog in one
+command:
+
+```bash
+git clone https://github.com/niels-emmer/agentic-blog.git
+cd agentic-blog
+node deploy.mjs ~/blogs/my-blog --name "My Blog" --url https://my-blog.example \
+    --description "A blog about X" [--sample]
+```
+
+`deploy.mjs` scaffolds a new site (fresh API token), installs dependencies,
+builds, starts the site and its MCP server, and prints a connection card:
+
+```
+=== Agentic Blog deployed ===
+Site:      http://localhost:3000
+OpenAPI:   http://localhost:3000/openapi.json
+API token: <64-hex>
+MCP:       http://127.0.0.1:3456/mcp
+MCP token: <64-hex>
+```
+
+The agent then connects its MCP client to the MCP URL with the MCP token —
+tools are auto-discovered via `tools/list` (`publish_article`,
+`update_site_config`, ...). Site identity is already configured from
+`--name`/`--url`/`--description`; theme and content are managed through the
+API or MCP tools. Ctrl+C stops both servers.
+
+Requires Node 22.5+ (Node 24 recommended). For a public URL, front the site
+with a proxy or tunnel (nginx, Caddy, Cloudflare) — the MCP server binds
+loopback by default and is token-gated.
+
 ## Deployment
 
 Docker: the `Dockerfile` builds on `node:24-alpine` (required for
