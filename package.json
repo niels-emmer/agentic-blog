@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "deploy": "node deploy.mjs",
     "test": "node --import ./test/alias-loader.mjs --test \"test/unit/*.test.ts\"",
     "test:integration": "npm run build && node --import ./test/alias-loader.mjs --test \"test/integration/*.test.ts\""
   },

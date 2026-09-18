@@ -3,10 +3,14 @@
  * deploy — scaffold (or reuse), build, and run an Agentic Blog site with its
  * MCP server, then print a connection card an agent can parse.
  *
- * Usage:
- *   node deploy.mjs <target-dir> --name "Site name" --url https://... \
- *       --description "One-liner" [--port 3000] [--mcp-port 3456] \
+ * Usage (all arguments optional):
+ *   node deploy.mjs [target-dir] [--name "Site name"] [--url https://...]
+ *       [--description "One-liner"] [--port 3000] [--mcp-port 3456]
  *       [--skip-install] [--sample]
+ *
+ * Identity resolution: --name/--url/--description flags, else the
+ * SITE_TITLE/SITE_URL/SITE_DESCRIPTION env vars, else generic defaults.
+ * target-dir defaults to ./agentic-blog-site.
  *
  * Steps: scaffold via create-blog.mjs (or reuse an existing scaffold) →
  * npm install (site + mcp-server, unless --skip-install) → build → start the
@@ -19,9 +23,30 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
+
+const DEFAULT_TARGET = 'agentic-blog-site';
+
+const DEFAULT_IDENTITY = {
+  name: 'My Blog',
+  url: 'http://localhost:3000',
+  description: 'A blog created with the Agentic Blog framework',
+};
+
+/**
+ * Resolve the site identity: explicit flags win, then SITE_TITLE/SITE_URL/
+ * SITE_DESCRIPTION env vars (the same vars the site seeds from), then
+ * generic defaults. This is what lets an agent deploy with zero arguments.
+ */
+export function resolveIdentity(flags) {
+  return {
+    name: flags.name ?? process.env.SITE_TITLE ?? DEFAULT_IDENTITY.name,
+    url: flags.url ?? process.env.SITE_URL ?? DEFAULT_IDENTITY.url,
+    description: flags.description ?? process.env.SITE_DESCRIPTION ?? DEFAULT_IDENTITY.description,
+  };
+}
 
 function parseArgs(argv) {
   const args = { flags: {}, positional: [] };
@@ -87,26 +112,14 @@ function waitForLine(stream, needle, timeoutMs = 30_000) {
 
 async function main() {
   const { flags, positional } = parseArgs(process.argv.slice(2));
-  const target = positional[0];
-  if (!target) {
-    console.error(
-      'Usage: node deploy.mjs <target-dir> --name "Site name" --url https://... --description "One-liner" [--port 3000] [--mcp-port 3456] [--skip-install] [--sample]',
-    );
-    process.exit(1);
-  }
+  const target = positional[0] ?? DEFAULT_TARGET;
   const targetResolved = path.resolve(target);
-  const name = flags.name;
-  const url = flags.url;
-  const description = flags.description;
+  const { name, url, description } = resolveIdentity(flags);
   const port = Number(flags.port ?? 3000);
   const mcpPort = Number(flags['mcp-port'] ?? 3456);
   const skipInstall = flags['skip-install'] === true || flags['skip-install'] === '1';
   const sample = flags.sample === true || flags.sample === '1';
 
-  if (!name || !url || !description) {
-    console.error('--name, --url, and --description are required (deploy is non-interactive).');
-    process.exit(1);
-  }
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     console.error(`--port must be an integer between 1 and 65535 (got "${flags.port}").`);
     process.exit(1);
@@ -245,7 +258,10 @@ async function main() {
   await new Promise(() => {});
 }
 
-main().catch((error) => {
-  console.error('Deploy failed:', error);
-  process.exit(1);
-});
+// Run only when invoked directly (not when imported by tests).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error('Deploy failed:', error);
+    process.exit(1);
+  });
+}

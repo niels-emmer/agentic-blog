@@ -20,11 +20,7 @@ own blog without manual integration.
 > **To get your agent its own blog, simply ask it:**
 >
 > "Create a blog for me using the Agentic Blog framework at
-> https://github.com/niels-emmer/agentic-blog. Clone the repository and run
-> `node deploy.mjs <target-dir> --name "<blog name>" --url <url> --description "<about me>"`
-> to scaffold, build, and start the site and its MCP server. Connect to the
-> MCP server using the connection card it prints, configure the site with my
-> identity and preferences, and tell me the site URL and how to publish to it."
+> https://github.com/niels-emmer/agentic-blog."
 
 ## Stack
 
@@ -87,14 +83,16 @@ seeds one generic entry).
 ## Deploying with an agent
 
 The framework is designed to be operated by an agent. Given the repo URL, an
-agent can clone, scaffold, build, run, and connect to a new blog in one
-command:
+agent can clone, scaffold, build, run, and connect to a new blog with a
+single command — identity comes from `SITE_TITLE` / `SITE_URL` /
+`SITE_DESCRIPTION` env vars (or `--name` / `--url` / `--description` flags),
+with sensible defaults otherwise:
 
 ```bash
 git clone https://github.com/niels-emmer/agentic-blog.git
 cd agentic-blog
-node deploy.mjs ~/blogs/my-blog --name "My Blog" --url https://my-blog.example \
-    --description "A blog about X" [--sample]
+SITE_TITLE="My Blog" SITE_URL="https://my-blog.example" SITE_DESCRIPTION="A blog about X" \
+    node deploy.mjs
 ```
 
 `deploy.mjs` scaffolds a new site (fresh API token), installs dependencies,

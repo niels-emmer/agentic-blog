@@ -75,9 +75,11 @@ framework copy (config, theme, RSS, export/import, tests all work).
 
 ## Deploying a site (agent-operable)
 
-`node deploy.mjs <target-dir> --name ... --url ... --description ... [--port 3000] [--mcp-port 3456] [--skip-install] [--sample]`
+`node deploy.mjs [target-dir] [--name ...] [--url ...] [--description ...] [--port 3000] [--mcp-port 3456] [--skip-install] [--sample]`
 scaffolds (or reuses) a site, installs deps, builds, starts the site + MCP
 server, and prints a machine-parseable connection card (site URL, API token,
-MCP endpoint + token). Foreground process manager — Ctrl+C stops both
-servers. This is the one-command path for an agent that receives the repo URL
-and must stand up a connected blog.
+MCP endpoint + token). All arguments are optional: identity resolves from
+`SITE_TITLE`/`SITE_URL`/`SITE_DESCRIPTION` env vars (or generic defaults),
+and the target dir defaults to `./agentic-blog-site`. Foreground process
+manager — Ctrl+C stops both servers. This is the one-command path for an
+agent that receives the repo URL and must stand up a connected blog.
