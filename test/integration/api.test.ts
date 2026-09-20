@@ -476,3 +476,99 @@ test('POST /api/import rejects oversized bodies with 413 and too many entries wi
   });
   assert.equal(tooMany.status, 400);
 });
+
+// ---------------------------------------------------------------------------
+// Full-text search
+// ---------------------------------------------------------------------------
+
+test('GET /api/search is public and returns ranked results', async () => {
+  const created = await fetch(`${BASE}/api/articles`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({
+      ...sample,
+      title: 'Reward hacking in RL',
+      tags: ['alignment'],
+      sections: [{ heading: 'Setup', paragraphs: ['A paragraph about reward hacking.'] }],
+    }),
+  });
+  assert.equal(created.status, 201);
+
+  // No bearer token — public by design.
+  const res = await fetch(`${BASE}/api/search?q=reward`);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { query: string; results: { slug: string; snippet: string }[] };
+  assert.equal(body.query, 'reward');
+  assert.ok(body.results.some((r) => r.slug === 'reward-hacking-in-rl'));
+  assert.match(body.results[0].snippet, /reward/);
+});
+
+test('GET /api/search matches body content and tags', async () => {
+  // 'alignment' appears only in the tags of the article created above.
+  const byTag = await fetch(`${BASE}/api/search?q=alignment`);
+  assert.equal(byTag.status, 200);
+  const tagBody = (await byTag.json()) as { results: { slug: string }[] };
+  assert.ok(tagBody.results.some((r) => r.slug === 'reward-hacking-in-rl'));
+
+  // Body match.
+  const byBody = await fetch(`${BASE}/api/search?q=paragraph`);
+  assert.equal(byBody.status, 200);
+  const bodyRes = (await byBody.json()) as { results: { slug: string }[] };
+  assert.ok(bodyRes.results.some((r) => r.slug === 'reward-hacking-in-rl'));
+});
+
+test('GET /api/search rejects short and long queries with 400', async () => {
+  const short = await fetch(`${BASE}/api/search?q=a`);
+  assert.equal(short.status, 400);
+
+  const long = await fetch(`${BASE}/api/search?q=${'x'.repeat(101)}`);
+  assert.equal(long.status, 400);
+});
+
+test('GET /api/search sanitizes FTS5 operators instead of erroring', async () => {
+  const res = await fetch(`${BASE}/api/search?q=${encodeURIComponent('operator OR - " *')}`);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { results: unknown[] };
+  assert.ok(Array.isArray(body.results));
+});
+
+test('GET /api/search respects the limit param', async () => {
+  const res = await fetch(`${BASE}/api/search?q=reward&limit=1`);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { results: unknown[] };
+  assert.equal(body.results.length, 1);
+});
+
+test('GET /api/search never returns drafts or archived entries', async () => {
+  await fetch(`${BASE}/api/articles`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({
+      ...sample,
+      title: 'Draft quasar notes',
+      status: 'draft',
+      sections: [{ heading: 'H', paragraphs: ['Draft body about quasars.'] }],
+    }),
+  });
+
+  const res = await fetch(`${BASE}/api/search?q=quasar`);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { results: { slug: string }[] };
+  assert.ok(!body.results.some((r) => r.slug === 'draft-quasar-notes'), 'drafts must not leak');
+});
+
+test('GET /api/articles?q= requires auth and searches every status', async () => {
+  // Unauthenticated → 401.
+  const noAuth = await fetch(`${BASE}/api/articles?q=quasar`);
+  assert.equal(noAuth.status, 401);
+
+  // Authenticated → finds the draft (management surface).
+  const res = await fetch(`${BASE}/api/articles?q=quasar`, { headers: authHeaders() });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { articles: { slug: string; status: string }[] };
+  assert.ok(body.articles.some((a) => a.slug === 'draft-quasar-notes' && a.status === 'draft'));
+
+  // Invalid query length → 400.
+  const bad = await fetch(`${BASE}/api/articles?q=a`, { headers: authHeaders() });
+  assert.equal(bad.status, 400);
+});

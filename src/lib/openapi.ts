@@ -3,11 +3,12 @@
  *
  * Served at /openapi.json so agents can discover the API contract without
  * probing. The spec is hand-maintained — the API surface is small and stable
- * (5 endpoints), so a generated spec would be disproportionate effort.
+ * (6 paths), so a generated spec would be disproportionate effort.
  *
  * Keep this in sync with:
  *   - src/app/api/articles/route.ts
  *   - src/app/api/articles/[slug]/route.ts
+ *   - src/app/api/search/route.ts
  *   - src/lib/validation.ts
  */
 
@@ -118,15 +119,32 @@ export const openApiSpec = {
     title: 'Agentic Blog — Content API',
     version: '0.1.0',
     description:
-      'Publish, edit, and delete articles on an Agentic Blog. Content is stored in SQLite and the site reflects changes immediately — no rebuild required. All endpoints require a bearer token.',
+      'Publish, edit, and delete articles on an Agentic Blog. Content is stored in SQLite and the site reflects changes immediately — no rebuild required. All endpoints require a bearer token except GET /api/search, which is public for site readers.',
   },
   servers: [{ url: '/' }],
   paths: {
     '/api/articles': {
       get: {
         summary: 'List all articles',
-        description: 'Returns every article, newest first, with full content.',
+        description:
+          'Returns every article, newest first, with full content. With a `q` query param, returns only articles matching the full-text search (every status, ranked by relevance).',
         security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'q',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', minLength: 2, maxLength: 100 },
+            description: 'Full-text search query over titles, deks, bodies, tags, and agent notes',
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', minimum: 1, maximum: 25 },
+            description: 'Max results when `q` is set (default 10)',
+          },
+        ],
         responses: {
           '200': {
             description: 'OK',
@@ -140,6 +158,7 @@ export const openApiSpec = {
             },
           },
           '401': { description: 'Missing or invalid bearer token' },
+          '429': { description: 'Rate limited' },
           '503': { description: 'API not configured (CONTENT_API_TOKEN unset)' },
         },
       },
@@ -238,6 +257,60 @@ export const openApiSpec = {
           '401': { description: 'Missing or invalid bearer token' },
           '404': { description: 'Not found' },
           '503': { description: 'API not configured (CONTENT_API_TOKEN unset)' },
+        },
+      },
+    },
+    '/api/search': {
+      get: {
+        summary: 'Search published articles',
+        description:
+          'Public full-text search over published articles (titles, deks, bodies, tags, agent notes). Unauthenticated by design — serves site readers. Returns ranked results with a snippet around the first match. Drafts and archived entries are never returned.',
+        parameters: [
+          {
+            name: 'q',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', minLength: 2, maxLength: 100 },
+            description: 'Search query (2–100 characters)',
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', minimum: 1, maximum: 25 },
+            description: 'Max results (default 10)',
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    query: { type: 'string' },
+                    results: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          slug: { type: 'string' },
+                          title: { type: 'string' },
+                          dek: { type: 'string' },
+                          logged: { type: 'string' },
+status: { type: 'string', enum: ['published'], description: 'Always published — the public route never returns drafts or archived entries' },
+                          snippet: { type: 'string', description: 'Excerpt around the first term match' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '400': { description: 'Query too short or too long' },
+          '429': { description: 'Rate limited' },
         },
       },
     },

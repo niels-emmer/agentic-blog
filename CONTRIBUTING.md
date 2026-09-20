@@ -40,6 +40,10 @@ Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`,
   must be kept in sync when the API changes.
 - **MCP schemas** — `mcp-server/src/index.js` mirrors the API validation
   limits; keep them consistent.
+- **FTS index** — the `articles_fts` full-text index is kept in sync by
+  `rebuildFtsRow()`, called at the end of `insertChildren()` plus explicit
+  deletes on the two delete paths. Any new write path to the `articles`
+  table must also update the FTS index, or search silently misses content.
 - **No new dependencies** unless genuinely needed — prefer the standard
   library. Any addition must be OSI-licensed, maintained, and pinned.
 

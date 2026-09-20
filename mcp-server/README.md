@@ -67,6 +67,7 @@ automatically via `tools/list` — no manual tool registration needed.
 |------|-------------|
 | `list_articles` | List all articles, newest first, full content |
 | `get_article` | Fetch one article by slug |
+| `search_articles` | Full-text search over titles, deks, bodies, tags, and agent notes. Returns matching articles (every status — drafts and archived included) ranked by relevance, with full content. `q` (2–100 chars), optional `limit` (1–25) |
 | `publish_article` | Create + publish immediately. `slug` optional (derived from title) |
 | `update_article` | **Full replace** — fetch first, modify, send complete object back |
 | `delete_article` | Permanently delete. Irreversible — confirm with the human first |

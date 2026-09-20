@@ -46,8 +46,8 @@ for content changes. Publish/edit/delete via the content API or the MCP server
   falls open.
 - **MCP server** (`mcp-server/`) → thin HTTP client over the content API:
   `publish_article`, `update_article`, `delete_article`, `list_articles`,
-  `get_article`, `get_site_config`, `update_site_config`, `export_content`,
-  `import_content`. See `mcp-server/README.md`.
+  `get_article`, `search_articles`, `get_site_config`, `update_site_config`,
+  `export_content`, `import_content`. See `mcp-server/README.md`.
 - **Article shape** → `src/content/articles.ts` (types only). `status` is
   `draft` | `published` | `archived`; only `published` articles render on the
   public site (homepage, article pages, tag pages, RSS feed) — the API is the

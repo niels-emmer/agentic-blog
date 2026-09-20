@@ -120,9 +120,22 @@ function migrate(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_sources_article ON sources(article_slug);
     CREATE INDEX IF NOT EXISTS idx_article_tags_tag ON article_tags(tag_slug);
     CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
+
+    -- Full-text search index (FTS5). 'slug' is UNINDEXED (join key only);
+    -- 'body' is the denormalized concatenation of section headings and
+    -- paragraphs. Kept in sync by rebuildFtsRow() on every write path.
+    CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
+      slug UNINDEXED,
+      title,
+      dek,
+      body,
+      tags,
+      agent_notes
+    );
   `);
 
   ensureThemeColumn(db);
+  backfillFtsIfEmpty(db);
 }
 
 /**
@@ -142,6 +155,37 @@ function ensureThemeColumn(db: DatabaseSync): void {
 /** Append-only record of content API mutations (create/update/delete). */
 function logAudit(db: DatabaseSync, action: 'create' | 'update' | 'delete', slug: string): void {
   db.prepare('INSERT INTO audit_log (action, slug) VALUES (?, ?)').run(action, slug);
+}
+
+/**
+ * One-time backfill of the FTS index for databases that predate the search
+ * feature (a live DB has content but no FTS rows yet). No-op once the index
+ * is non-empty; from then on rebuildFtsRow() keeps it in sync.
+ */
+function backfillFtsIfEmpty(db: DatabaseSync): void {
+  const { count } = db.prepare('SELECT COUNT(*) AS count FROM articles_fts').get() as {
+    count: number;
+  };
+  if (count > 0) return;
+  const rows = db.prepare('SELECT * FROM articles').all() as unknown as ArticleRow[];
+  for (const row of rows) {
+    rebuildFtsRow(db, rowToArticle(db, row));
+  }
+}
+
+/**
+ * Replace the FTS row for an article with its current denormalized content.
+ * Called at the end of insertChildren(), so every create/update path
+ * (createArticle, updateArticleInTx, importArticles, seed) stays in sync
+ * automatically.
+ */
+function rebuildFtsRow(db: DatabaseSync, article: Article): void {
+  const body = article.sections.map((s) => [s.heading, ...s.paragraphs].join(' ')).join(' ');
+  db.prepare('DELETE FROM articles_fts WHERE slug = ?').run(article.slug);
+  db.prepare(
+    `INSERT INTO articles_fts (slug, title, dek, body, tags, agent_notes)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(article.slug, article.title, article.dek, body, article.tags.join(' '), article.agentNotes ?? '');
 }
 
 /**
@@ -264,6 +308,10 @@ function insertChildren(db: DatabaseSync, article: Article): void {
       slugifyTag(tag),
     );
   });
+
+  // Keep the FTS index in sync. Every create/update path funnels through
+  // insertChildren, so this single call covers them all.
+  rebuildFtsRow(db, article);
 }
 
 function replaceChildren(db: DatabaseSync, slug: string): void {
@@ -290,6 +338,124 @@ export function getArticle(slug: string): Article | undefined {
     | ArticleRow
     | undefined;
   return row ? rowToArticle(database, row) : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Full-text search (FTS5)
+// ---------------------------------------------------------------------------
+
+export interface SearchResult {
+  slug: string;
+  title: string;
+  dek: string;
+  logged: string;
+  status: Article['status'];
+  /** Plain-text excerpt around the first term match (or the dek as fallback). */
+  snippet: string;
+}
+
+/**
+ * Ranked full-text search over titles, deks, section bodies, tags, and agent
+ * notes. The raw query is sanitized into an FTS5 MATCH expression (quoted
+ * prefix tokens joined with AND) so user input can never inject FTS5
+ * operators or throw a syntax error.
+ *
+ * `publishedOnly` restricts results to published articles — used by the
+ * public /api/search route. The management surface (GET /api/articles?q=)
+ * searches every status.
+ */
+export function searchArticles(
+  rawQuery: string,
+  limit = 10,
+  opts: { publishedOnly?: boolean } = {},
+): SearchResult[] {
+  const database = getDb();
+  const match = buildFtsQuery(rawQuery);
+  if (!match) return [];
+  // Defensive: SQLite treats a negative LIMIT as "no limit".
+  const safeLimit = Math.max(1, limit);
+
+  // The status filter lives in SQL (before LIMIT) so publishedOnly can never
+  // truncate results by filtering after the limit — e.g. drafts ranking above
+  // published matches must not hide them from the public route.
+  const statusFilter = opts.publishedOnly ? "AND a.status = 'published'" : '';
+  const rows = database
+    .prepare(
+      `SELECT articles_fts.slug FROM articles_fts
+       JOIN articles a ON a.slug = articles_fts.slug
+       WHERE articles_fts MATCH ? ${statusFilter}
+       ORDER BY bm25(articles_fts)
+       LIMIT ?`,
+    )
+    .all(match, safeLimit) as unknown as { slug: string }[];
+
+  const terms = tokenize(rawQuery);
+  return rows
+    .map((row) => {
+      const article = getArticle(row.slug);
+      if (!article) return null;
+      return {
+        slug: article.slug,
+        title: article.title,
+        dek: article.dek,
+        logged: article.logged,
+        status: article.status,
+        snippet: makeSnippet(article, terms),
+      };
+    })
+    .filter((r): r is SearchResult => r !== null);
+}
+
+/** Split on non-alphanumerics, lowercase, drop empties. */
+function tokenize(raw: string): string[] {
+  return raw
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length > 0);
+}
+
+/**
+ * Build a safe FTS5 MATCH expression: every token quoted and prefix-starred
+ * (`"term"*`), joined with AND. Quoting neutralizes FTS5 operators; the
+ * prefix star gives partial-match UX. Returns '' when there is nothing to
+ * search for.
+ */
+function buildFtsQuery(raw: string): string {
+  const tokens = tokenize(raw);
+  if (tokens.length === 0) return '';
+  return tokens.map((t) => `"${t}"*`).join(' AND ');
+}
+
+/** Earliest index of any term in the text, or -1. */
+function findTermIndex(text: string, terms: string[]): number {
+  const lower = text.toLowerCase();
+  let best = -1;
+  for (const term of terms) {
+    const idx = lower.indexOf(term);
+    if (idx >= 0 && (best === -1 || idx < best)) best = idx;
+  }
+  return best;
+}
+
+/** A ~160-char window around the match, ellipsized on either side. */
+function truncateAround(text: string, matchIndex: number, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const start = Math.max(0, matchIndex - Math.floor(maxLen * 0.4));
+  const end = Math.min(text.length, start + maxLen);
+  const prefix = start > 0 ? '…' : '';
+  const suffix = end < text.length ? '…' : '';
+  return `${prefix}${text.slice(start, end).trim()}${suffix}`;
+}
+
+/** First paragraph containing a term, windowed around the match; else the dek. */
+function makeSnippet(article: Article, terms: string[]): string {
+  for (const section of article.sections) {
+    for (const paragraph of section.paragraphs) {
+      const idx = findTermIndex(paragraph, terms);
+      if (idx >= 0) return truncateAround(paragraph, idx, 160);
+    }
+  }
+  return article.dek.length > 160 ? `${article.dek.slice(0, 157)}…` : article.dek;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +547,7 @@ export function importArticles(
       for (const row of rows) {
         if (!incoming.has(row.slug)) {
           database.prepare('DELETE FROM articles WHERE slug = ?').run(row.slug);
+          database.prepare('DELETE FROM articles_fts WHERE slug = ?').run(row.slug);
           logAudit(database, 'delete', row.slug);
           deleted += 1;
         }
@@ -402,6 +569,7 @@ export function deleteArticle(slug: string): boolean {
     const result = database.prepare('DELETE FROM articles WHERE slug = ?').run(slug);
     if (result.changes > 0) {
       logAudit(database, 'delete', slug);
+      database.prepare('DELETE FROM articles_fts WHERE slug = ?').run(slug);
     }
     database.exec('COMMIT');
     return result.changes > 0;

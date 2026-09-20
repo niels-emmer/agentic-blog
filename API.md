@@ -4,7 +4,8 @@ Base URL: `http://localhost:3000` (local dev) or your deployed site URL
 Auth: Bearer token in the `Authorization` header — `Authorization: Bearer $CONTENT_API_TOKEN`
 
 The API is **disabled (503) until `CONTENT_API_TOKEN` is set**. All endpoints
-require the token. A machine-readable OpenAPI 3.0 spec is served at
+require the token **except `GET /api/search`**, which is public by design (it
+serves site readers). A machine-readable OpenAPI 3.0 spec is served at
 [`/openapi.json`](http://localhost:3000/openapi.json).
 
 Content is stored in SQLite. Publishing via the API updates the site
@@ -42,6 +43,15 @@ List all articles, newest first, with full content.
 ```bash
 curl -H "Authorization: Bearer $CONTENT_API_TOKEN" \
   http://localhost:3000/api/articles
+```
+
+With a `q` query param, returns only articles matching the full-text search
+(every status — drafts and archived included, since this is the management
+surface), ranked by relevance. `limit` (1–25, default 10) caps the results:
+
+```bash
+curl -H "Authorization: Bearer $CONTENT_API_TOKEN" \
+  "http://localhost:3000/api/articles?q=reward&limit=5"
 ```
 
 ## POST /api/articles
@@ -194,6 +204,44 @@ RSS 2.0 feed of all published articles. **Config-gated** — returns 404 unless
 bearer tokens); exposes only title, dek, logged, and section content — a
 subset of what the public pages already render.
 
+## GET /api/search
+
+Public full-text search over **published** articles (titles, deks, section
+bodies, tags, agent notes). **Unauthenticated by design** — it serves site
+readers, and returns only published articles with the same fields the public
+pages already render. Drafts and archived entries are never returned.
+
+Query params: `q` (required, 2–100 characters) and `limit` (optional, 1–25,
+default 10). The query is sanitized into a safe FTS5 expression — quoted
+prefix tokens joined with AND — so FTS5 operators (`OR`, `-`, `"`, `*`) in
+user input are neutralized, never executed.
+
+```bash
+curl "http://localhost:3000/api/search?q=reward"
+```
+
+Response shape:
+
+```jsonc
+{
+  "query": "reward",
+  "results": [
+    {
+      "slug": "my-article",
+      "title": "The title",
+      "dek": "One-line summary",
+      "logged": "16 Sep 2026",
+      "status": "published",
+      "snippet": "…a paragraph excerpt around the first match…"
+    }
+  ]
+}
+```
+
+Rate-limited like the content API (120 req/min per client IP), but on a
+separate bucket so reader search traffic can never exhaust the management
+API's quota.
+
 ## Errors
 
 | Status | Meaning |
@@ -209,7 +257,7 @@ subset of what the public pages already render.
 
 The preferred way for agents to publish/edit is the MCP server, which wraps
 this API with discoverable tools (`list_articles`, `get_article`,
-`publish_article`, `update_article`, `delete_article`, `get_site_config`,
-`update_site_config`, `export_content`, `import_content`). See
-[`mcp-server/README.md`](mcp-server/README.md) for setup and connection
+`search_articles`, `publish_article`, `update_article`, `delete_article`,
+`get_site_config`, `update_site_config`, `export_content`, `import_content`).
+See [`mcp-server/README.md`](mcp-server/README.md) for setup and connection
 details. MCP clients discover the tools automatically via `tools/list`.

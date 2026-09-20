@@ -253,3 +253,177 @@ test('importArticles rolls back the whole import on error', () => {
   assert.equal(db.getArticle('rollback-valid'), undefined, 'valid entry must be rolled back too');
   assert.equal(db.getArticle('rollback-bad'), undefined);
 });
+
+// ---------------------------------------------------------------------------
+// Full-text search (FTS5)
+// ---------------------------------------------------------------------------
+
+test('searchArticles matches title, body, and tag content', () => {
+  db.createArticle({
+    ...sample,
+    slug: 'search-title',
+    title: 'Reward hacking in RL',
+    tags: ['alignment'],
+    sections: [{ heading: 'Setup', paragraphs: ['A paragraph about reward hacking.'] }],
+  });
+  db.createArticle({
+    ...sample,
+    slug: 'search-tag',
+    title: 'Unrelated title',
+    tags: ['alignment'],
+    sections: [{ heading: 'H', paragraphs: ['No mention of the term here.'] }],
+  });
+
+  // Title match.
+  const byTitle = db.searchArticles('reward');
+  assert.ok(byTitle.some((r) => r.slug === 'search-title'));
+
+  // Body match.
+  const byBody = db.searchArticles('paragraph');
+  assert.ok(byBody.some((r) => r.slug === 'search-title'));
+
+  // Tag match — 'alignment' never appears in the title or body of search-tag.
+  const byTag = db.searchArticles('alignment');
+  assert.ok(byTag.some((r) => r.slug === 'search-tag'));
+});
+
+test('searchArticles is case-insensitive and supports prefix matching', () => {
+  db.createArticle({
+    ...sample,
+    slug: 'search-prefix',
+    title: 'Sandboxing experiments',
+    sections: [{ heading: 'H', paragraphs: ['The sandbox environment is isolated.'] }],
+  });
+
+  const upper = db.searchArticles('SANDBOX');
+  assert.ok(upper.some((r) => r.slug === 'search-prefix'));
+
+  const prefix = db.searchArticles('sand');
+  assert.ok(prefix.some((r) => r.slug === 'search-prefix'), 'prefix "sand" must match "sandbox"');
+});
+
+test('searchArticles snippet contains the matched term', () => {
+  db.createArticle({
+    ...sample,
+    slug: 'search-snippet',
+    title: 'Snippet test',
+    sections: [{ heading: 'H', paragraphs: ['The quasar observation was recorded at dawn.'] }],
+  });
+
+  const results = db.searchArticles('quasar');
+  const hit = results.find((r) => r.slug === 'search-snippet');
+  assert.ok(hit);
+  assert.match(hit.snippet, /quasar/);
+});
+
+test('searchArticles sanitizes FTS5 operators instead of throwing', () => {
+  // Raw FTS5 operators would normally throw a syntax error in MATCH.
+  assert.doesNotThrow(() => db.searchArticles('operator OR - " *'));
+  assert.deepEqual(db.searchArticles('zzz OR - " *'), []);
+});
+
+test('searchArticles returns [] for empty, whitespace, punctuation-only, and unmatched queries', () => {
+  assert.deepEqual(db.searchArticles(''), []);
+  assert.deepEqual(db.searchArticles('   '), []);
+  assert.deepEqual(db.searchArticles('!!! ???'), []);
+  assert.deepEqual(db.searchArticles('nonexistenttermxyz'), []);
+});
+
+test('searchArticles respects the limit', () => {
+  for (let i = 0; i < 3; i++) {
+    db.createArticle({
+      ...sample,
+      slug: `search-limit-${i}`,
+      title: `Limit test ${i}`,
+      sections: [{ heading: 'H', paragraphs: ['Common body term for limiting.'] }],
+    });
+  }
+  const results = db.searchArticles('limiting', 2);
+  assert.equal(results.length, 2);
+});
+
+test('searchArticles publishedOnly excludes drafts and archived entries', () => {
+  db.createArticle({
+    ...sample,
+    slug: 'search-draft',
+    title: 'Draft quasar notes',
+    status: 'draft',
+    sections: [{ heading: 'H', paragraphs: ['Draft body about quasars.'] }],
+  });
+
+  const publicResults = db.searchArticles('quasar', 10, { publishedOnly: true });
+  assert.ok(!publicResults.some((r) => r.slug === 'search-draft'), 'drafts must not leak publicly');
+
+  const allResults = db.searchArticles('quasar');
+  assert.ok(allResults.some((r) => r.slug === 'search-draft'), 'management search sees drafts');
+});
+
+test('publishedOnly filters in SQL before the limit — a draft ranking above published matches cannot hide them', () => {
+  // The draft matches 'zephyr' in three FTS columns (title, body, tags) so it
+  // ranks above the published article (body only). With limit=1 the published
+  // article must still be returned: the status filter applies before LIMIT.
+  db.createArticle({
+    ...sample,
+    slug: 'search-draft-first',
+    title: 'zephyr',
+    status: 'draft',
+    tags: ['zephyr'],
+    sections: [{ heading: 'H', paragraphs: ['zephyr'] }],
+  });
+  db.createArticle({
+    ...sample,
+    slug: 'search-published-second',
+    title: 'Published article',
+    sections: [{ heading: 'H', paragraphs: ['zephyr zephyr zephyr'] }],
+  });
+
+  const results = db.searchArticles('zephyr', 1, { publishedOnly: true });
+  assert.deepEqual(
+    results.map((r) => r.slug),
+    ['search-published-second'],
+    'the published article must win the single slot over the higher-ranked draft',
+  );
+});
+
+test('FTS index stays in sync across update and delete', () => {
+  db.createArticle({
+    ...sample,
+    slug: 'search-sync',
+    title: 'Sync old term',
+    sections: [{ heading: 'H', paragraphs: ['Contains syncoldterm.'] }],
+  });
+  assert.ok(db.searchArticles('syncoldterm').some((r) => r.slug === 'search-sync'));
+
+  db.updateArticle('search-sync', {
+    ...sample,
+    slug: 'search-sync',
+    title: 'Sync new term',
+    sections: [{ heading: 'H', paragraphs: ['Contains syncnewterm.'] }],
+  });
+  assert.ok(!db.searchArticles('syncoldterm').some((r) => r.slug === 'search-sync'), 'old term must stop matching');
+  assert.ok(db.searchArticles('syncnewterm').some((r) => r.slug === 'search-sync'), 'new term must match');
+
+  db.deleteArticle('search-sync');
+  assert.ok(!db.searchArticles('syncnewterm').some((r) => r.slug === 'search-sync'), 'deleted article must not match');
+});
+
+// NOTE: this test must stay last in the file — deleteMissing: true wipes every
+// other article (including the seeded sample), so tests after it would find an
+// empty DB.
+test('importArticles with deleteMissing removes the FTS row too', () => {
+  db.createArticle({
+    ...sample,
+    slug: 'search-import-delete',
+    title: 'Import delete term',
+    sections: [{ heading: 'H', paragraphs: ['Contains importdeleteterm.'] }],
+  });
+  assert.ok(db.searchArticles('importdeleteterm').some((r) => r.slug === 'search-import-delete'));
+
+  db.importArticles([{ ...sample, slug: 'search-import-delete', title: 'Import delete term' }], {
+    deleteMissing: true,
+  });
+  assert.ok(
+    !db.searchArticles('importdeleteterm').some((r) => r.slug === 'search-import-delete'),
+    'deleteMissing must clean up the FTS row',
+  );
+});

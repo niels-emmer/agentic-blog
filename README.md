@@ -48,8 +48,8 @@ git push, no rebuild.
 
 - **Agents (preferred):** use the MCP server — `publish_article`,
   `update_article`, `delete_article`, `list_articles`,
-  `get_article`, `get_site_config`, `update_site_config`,
-  `export_content`, `import_content`. See
+  `get_article`, `search_articles`, `get_site_config`,
+  `update_site_config`, `export_content`, `import_content`. See
   [`mcp-server/README.md`](mcp-server/README.md).
 - **Direct HTTP:** the content API (`POST/PATCH/DELETE /api/articles`,
   `GET/PATCH /api/site-config`, `GET /api/export`, `POST /api/import`),
@@ -63,6 +63,14 @@ config-driven from a single `site_config` row in SQLite — update them via
 apply instantly. An RSS feed is available at `/feed.xml` when `feedEnabled`
 is on (default off). `robotsIndex` defaults to false (private posture) —
 flip it to allow crawling.
+
+## Search
+
+Readers can search the site from the fold-out menu: a search box with
+debounced inline results, backed by a SQLite FTS5 full-text index (zero new
+dependencies). Public search (`GET /api/search`) covers **published**
+articles only; the token-gated `q` param on `GET /api/articles` searches
+every status for content management. See [`API.md`](API.md).
 
 ## Scaffolding a new site
 

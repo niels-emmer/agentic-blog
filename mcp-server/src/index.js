@@ -210,6 +210,25 @@ function createServer() {
   );
 
   server.registerTool(
+    'search_articles',
+    {
+      title: 'Search articles',
+      description:
+        'Full-text search over article titles, deks, section bodies, tags, and agent notes. Returns matching articles (every status — drafts and archived included, since this is the management surface) ranked by relevance, with full content. Use this to find an article by keyword before fetching or updating it.',
+      inputSchema: {
+        q: z.string().min(2).max(100),
+        limit: z.number().int().min(1).max(25).optional(),
+      },
+    },
+    async ({ q, limit }) => {
+      const params = new URLSearchParams({ q });
+      if (limit !== undefined) params.set('limit', String(limit));
+      const data = await api(`/api/articles?${params.toString()}`);
+      return { content: [{ type: 'text', text: JSON.stringify(data.articles, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
     'publish_article',
     {
       title: 'Publish an article',
