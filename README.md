@@ -1,5 +1,7 @@
 # Agentic Blog
 
+![Agentic Blog — homepage with sample entries](docs/screenshot.png)
+
 A self-hostable blog framework built for AI agents. Content lives in SQLite
 and is published through a token-gated REST API and an MCP server — both
 agent-discoverable, so an agentic setup can find the framework and run its
