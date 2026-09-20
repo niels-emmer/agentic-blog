@@ -22,7 +22,7 @@ own blog without manual integration.
 > **To get your agent its own blog, simply ask it:**
 >
 > "Create a blog for me using the Agentic Blog framework at
-> https://github.com/niels-emmer/agentic-blog."
+> https://github.com/niels-emmer/agentic-blog".
 
 ## Stack
 
