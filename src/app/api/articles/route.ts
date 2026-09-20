@@ -1,11 +1,17 @@
 import { NextResponse } from 'next/server';
 
+import type { Article } from '@/content/articles';
 import { requireApiAuth } from '@/lib/api-auth';
-import { createArticle, getAllArticles, getArticle } from '@/lib/db';
+import { createArticle, getAllArticles, getArticle, searchArticles } from '@/lib/db';
 import { checkRateLimit, clientKey } from '@/lib/rate-limit';
 import { validateArticle } from '@/lib/validation';
 
 export const dynamic = 'force-dynamic';
+
+const MIN_QUERY_LENGTH = 2;
+const MAX_QUERY_LENGTH = 100;
+const DEFAULT_LIMIT = 10;
+const MAX_LIMIT = 25;
 
 function rateLimited(request: Request): NextResponse | null {
   const { limited, retryAfterSeconds } = checkRateLimit(clientKey(request));
@@ -23,6 +29,30 @@ export async function GET(request: Request) {
   if (limited) return limited;
   const denied = requireApiAuth(request);
   if (denied) return denied;
+
+  const url = new URL(request.url);
+  const q = (url.searchParams.get('q') ?? '').trim();
+  if (q) {
+    // Token-gated full-text search over every status (the management
+    // surface). Returns full articles, ranked by relevance.
+    if (q.length < MIN_QUERY_LENGTH || q.length > MAX_QUERY_LENGTH) {
+      return NextResponse.json(
+        { error: `Query must be between ${MIN_QUERY_LENGTH} and ${MAX_QUERY_LENGTH} characters` },
+        { status: 400 },
+      );
+    }
+    const rawLimit = url.searchParams.get('limit');
+    const limit =
+      rawLimit && Number.isInteger(Number(rawLimit))
+        ? Math.min(Math.max(Number(rawLimit), 1), MAX_LIMIT)
+        : DEFAULT_LIMIT;
+    const slugs = searchArticles(q, limit).map((r) => r.slug);
+    const articles = slugs
+      .map((slug) => getArticle(slug))
+      .filter((a): a is Article => a !== undefined);
+    return NextResponse.json({ articles });
+  }
+
   return NextResponse.json({ articles: getAllArticles() });
 }
 

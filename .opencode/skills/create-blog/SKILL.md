@@ -30,8 +30,8 @@ node create-blog.mjs <target-dir> [--name "Site name"] [--url https://...] \
 ## What it does
 
 1. Copies the repo, excluding this site's data (`.data/`), git history
-   (`.git/`), build artifacts (`.next/`, `node_modules/`), and session docs
-   (`docs/PLAN.md`, `docs/decision-log.md`).
+   (`.git/`), build artifacts (`.next/`, `node_modules/`), and any env files
+   (`.env`, `.env.local` at any depth).
 2. Generates a 64-hex content-API token (`crypto.randomBytes(32)`).
 3. Writes `.env.local` with `CONTENT_API_TOKEN` plus `SITE_TITLE`,
    `SITE_URL`, `SITE_DESCRIPTION` — the site config seeds from these on first
@@ -45,7 +45,7 @@ node create-blog.mjs <target-dir> [--name "Site name"] [--url https://...] \
 - Publish entries via the content API (`POST /api/articles`) or the MCP
   server (`mcp-server/`) — see `API.md` and `mcp-server/README.md`.
 - The scaffolded site is a full framework copy: site config, theme, RSS,
-  export/import, and tests all work out of the box.
+  full-text search, export/import, and tests all work out of the box.
 
 ## Notes
 

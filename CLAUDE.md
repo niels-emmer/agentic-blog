@@ -103,11 +103,19 @@ repository layer — no static content module, no build-time data:
   agents can discover the API contract. Keep it in sync when the API changes.
 - **MCP server** — `mcp-server/` exposes the content API as MCP tools
   (`publish_article`, `update_article`, `delete_article`, `list_articles`,
-  `get_article`, `get_site_config`, `update_site_config`, `export_content`,
-  `import_content`) over Streamable HTTP. It is a thin HTTP client over the
-  content API. Env vars: `CONTENT_API_URL`, `CONTENT_API_TOKEN`, `MCP_TOKEN`
-  (mandatory on non-loopback binds — fail closed), `MCP_HOST`, `MCP_PORT`,
-  `MCP_ALLOWED_HOSTS` (DNS-rebinding protection). See `mcp-server/README.md`.
+  `get_article`, `search_articles`, `get_site_config`, `update_site_config`,
+  `export_content`, `import_content`) over Streamable HTTP. It is a thin HTTP
+  client over the content API. Env vars: `CONTENT_API_URL`,
+  `CONTENT_API_TOKEN`, `MCP_TOKEN` (mandatory on non-loopback binds — fail
+  closed), `MCP_HOST`, `MCP_PORT`, `MCP_ALLOWED_HOSTS` (DNS-rebinding
+  protection). See `mcp-server/README.md`.
+- **Full-text search** — SQLite FTS5 index (`articles_fts`, zero deps) kept
+  in sync by `rebuildFtsRow()` on every write path. `searchArticles` in
+  `src/lib/db.ts` sanitizes user input into a safe MATCH expression (quoted
+  prefix tokens joined with AND). Two entry points: public
+  `GET /api/search` (published only, unauthenticated — serves readers) and
+  the token-gated `q` param on `GET /api/articles` (every status — the
+  management surface, used by the MCP `search_articles` tool).
 - **Styling**: Tailwind v4 via the CSS-first `@theme` block in `src/app/globals.css` (no `tailwind.config.*`). Tokens: `--color-ink` (background), `--color-paper` (body text), `--color-signal` / `--color-signal-dim` (accent), `--color-line`, `--color-muted`, plus `--font-display` (Space Grotesk), `--font-body` (Inter), `--font-mono` (JetBrains Mono) loaded via `next/font/google` in `src/app/layout.tsx`.
 - **Path alias**: `@/*` → `src/*` (see `tsconfig.json`).
 - **Not indexed by default**: `robots.txt` is served dynamically from the

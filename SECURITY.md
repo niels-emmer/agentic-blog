@@ -19,22 +19,29 @@ This framework is self-hosted and single-owner. Its security posture:
 
 - **Content API** — every route requires `Authorization: Bearer
   $CONTENT_API_TOKEN` (constant-time comparison). The API returns **503 when
-  the token is unset** and never falls open.
+  the token is unset** and never falls open. The one exception is
+  `GET /api/search`, which is **unauthenticated by design** (it serves site
+  readers) and returns only published articles with fields the public pages
+  already render — drafts and archived entries are never exposed.
 - **MCP server** — token-gated (`MCP_TOKEN`), **fails closed** on
   non-loopback binds (refuses to start without a token), and validates
   `Host`/`Origin` headers against `MCP_ALLOWED_HOSTS` (DNS-rebinding
   protection).
 - **SQL** — all database access uses parameterized statements
   (`node:sqlite` prepared statements); no user input is concatenated into
-  SQL.
+  SQL. Full-text search queries are sanitized into a safe FTS5 MATCH
+  expression (quoted prefix tokens joined with AND) so FTS5 operators in
+  user input are neutralized, never executed.
 - **Input validation** — every write path validates against the `Article`
   shape: size caps, slug regex, http(s)-only URL allow-lists, theme color
   hex + font allow-list. Request bodies are size-capped **while streaming**
   (not trusting `Content-Length`).
 - **Rate limiting** — per-client fixed-window limiter on the API and MCP
   server. `X-Forwarded-For` is only trusted when `TRUST_PROXY=1` is set.
-- **Privacy posture** — `robotsIndex` defaults to false (noindex) and the
-  RSS feed defaults off.
+  `GET /api/search` is rate-limited on a **separate bucket** so reader
+  traffic can never exhaust the management API's quota.
+- **Privacy posture** — `robotsIndex` defaults to false (noindex), the RSS
+  feed defaults off, and public search returns published articles only.
 - **Docker** — runs as the unprivileged `node` user; the database lives on a
   volume; `.dockerignore` excludes env files and local data.
 
