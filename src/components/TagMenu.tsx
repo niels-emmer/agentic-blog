@@ -16,6 +16,33 @@ const statusLabel: Record<SearchResult['status'], string> = {
   archived: 'archived',
 };
 
+/**
+ * Wrap the earliest query-term match in a <mark> (styled as the accent
+ * color). Returns the text unchanged when nothing matches.
+ */
+function highlight(text: string, query: string): ReactNode {
+  const terms = query.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (terms.length === 0) return text;
+  const lower = text.toLowerCase();
+  let idx = -1;
+  let term = '';
+  for (const t of terms) {
+    const i = lower.indexOf(t);
+    if (i >= 0 && (idx === -1 || i < idx)) {
+      idx = i;
+      term = t;
+    }
+  }
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="bg-transparent text-signal">{text.slice(idx, idx + term.length)}</mark>
+      {text.slice(idx + term.length)}
+    </>
+  );
+}
+
 export function TagMenu({ tags }: { tags: TagEntry[] }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -85,8 +112,7 @@ export function TagMenu({ tags }: { tags: TagEntry[] }) {
               className="absolute inset-0 bg-ink/70"
             />
             <aside className="absolute inset-y-0 right-0 flex w-full max-w-xs flex-col border-l border-white/10 bg-ink px-6 py-6 sm:px-8">
-              <div className="flex items-center justify-between">
-                <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-muted">Search</h2>
+              <div className="flex items-center justify-end">
                 <button
                   type="button"
                   onClick={close}
@@ -97,14 +123,29 @@ export function TagMenu({ tags }: { tags: TagEntry[] }) {
                 </button>
               </div>
 
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search the log…"
-                autoFocus
-                className="mt-4 w-full rounded-full border border-white/10 bg-transparent px-4 py-2 font-mono text-sm text-paper placeholder:text-muted/60 focus:border-signal/40 focus:outline-none"
-              />
+              <div className="mt-6">
+                <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-muted">Search</h2>
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search the log…"
+                  className="mt-3 w-full rounded-full border border-white/10 bg-transparent px-4 py-2 font-mono text-sm text-paper placeholder:text-muted/60 focus:border-signal/40 focus:outline-none"
+                />
+              </div>
+
+              <div className="mt-6">
+                <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-muted">Show only</h2>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Link
+                    href="/status/published"
+                    onClick={close}
+                    className="rounded-full border border-white/10 px-3 py-1 font-mono text-xs text-muted transition hover:border-signal/40 hover:text-signal"
+                  >
+                    Published
+                  </Link>
+                </div>
+              </div>
 
               <div className="mt-4 flex-1 overflow-y-auto">
                 {searching ? (
@@ -139,48 +180,27 @@ export function TagMenu({ tags }: { tags: TagEntry[] }) {
                     </ul>
                   )
                 ) : (
-                  <div className="mt-6 flex flex-wrap gap-2">
-                    {tags.map((tag) => (
-                      <Link
-                        key={tag.slug}
-                        href={`/tags/${tag.slug}`}
-                        onClick={close}
-                        className="rounded-full border border-white/10 px-3 py-1 font-mono text-xs text-muted transition hover:border-signal/40 hover:text-signal"
-                      >
-                        {tag.label}
-                      </Link>
-                    ))}
-                  </div>
+                  <>
+                    <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-muted">Tags</h2>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {tags.map((tag) => (
+                        <Link
+                          key={tag.slug}
+                          href={`/tags/${tag.slug}`}
+                          onClick={close}
+                          className="rounded-full border border-white/10 px-3 py-1 font-mono text-xs text-muted transition hover:border-signal/40 hover:text-signal"
+                        >
+                          {tag.label}
+                        </Link>
+                      ))}
+                    </div>
+                  </>
                 )}
               </div>
             </aside>
           </div>,
           document.body,
         )}
-    </>
-  );
-}
-
-/** Wrap the earliest term match in a <mark> styled as the accent color. */
-function highlight(text: string, query: string): ReactNode {
-  const terms = query.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-  if (terms.length === 0) return text;
-  const lower = text.toLowerCase();
-  let idx = -1;
-  let term = '';
-  for (const t of terms) {
-    const i = lower.indexOf(t);
-    if (i >= 0 && (idx === -1 || i < idx)) {
-      idx = i;
-      term = t;
-    }
-  }
-  if (idx === -1) return text;
-  return (
-    <>
-      {text.slice(0, idx)}
-      <mark className="bg-transparent text-signal">{text.slice(idx, idx + term.length)}</mark>
-      {text.slice(idx + term.length)}
     </>
   );
 }

@@ -603,3 +603,20 @@ test('homepage paginates at homepageCap with /?page=N', async () => {
   assert.match(page1Html, /Pagination entry 25/);
   assert.doesNotMatch(page2Html, /Pagination entry 25/);
 });
+
+test('status index pages list published articles and 404 on unknown status', async () => {
+  const published = await fetch(`${BASE}/status/published`);
+  assert.equal(published.status, 200);
+  const publishedHtml = (await published.text()).replace(/<!--.*?-->/g, '');
+  assert.match(publishedHtml, /Published/);
+  assert.match(publishedHtml, /Pagination entry 25/);
+
+  // Drafts never render on the public site, so the draft status page is empty.
+  const draft = await fetch(`${BASE}/status/draft`);
+  assert.equal(draft.status, 200);
+  const draftHtml = (await draft.text()).replace(/<!--.*?-->/g, '');
+  assert.doesNotMatch(draftHtml, /draft-quasar-notes/);
+
+  const bogus = await fetch(`${BASE}/status/bogus`);
+  assert.equal(bogus.status, 404);
+});

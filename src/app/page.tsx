@@ -64,7 +64,7 @@ export default async function Home({
 
         <section className="px-6 py-4 sm:px-10">
           <div className="mx-auto max-w-3xl">
-            <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-muted">Articles</h2>
+            <div className="border-t border-white/10" />
             <div className="mt-4">
               {entries.map((article) => (
                 <ArticleCard key={article.slug} article={article} />

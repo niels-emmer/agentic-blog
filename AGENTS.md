@@ -50,8 +50,12 @@ for content changes. Publish/edit/delete via the content API or the MCP server
   `export_content`, `import_content`. See `mcp-server/README.md`.
 - **Article shape** → `src/content/articles.ts` (types only). `status` is
   `draft` | `published` | `archived`; only `published` articles render on the
-  public site (homepage, article pages, tag pages, RSS feed) — the API is the
-  management surface and returns every status.
+  public site (homepage, article pages, tag pages, status pages, RSS feed) —
+  the API is the management surface and returns every status.
+- **Status index pages** → `/status/[status]` (draft | published | archived)
+  lists articles by status, reachable from the menu drawer's "Show only"
+  section. Only `published` renders publicly, so draft/archived pages are
+  empty; the API is the management surface for those statuses.
 - **Site config** → single `site_config` row drives chrome (title, hero,
   footer, robots toggle, homepage cap, feed toggle) + runtime theme (colors,
   fonts, `heroImageUrl`). Update via `PATCH /api/site-config` or
