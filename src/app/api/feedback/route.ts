@@ -92,6 +92,10 @@ export async function POST(request: Request) {
  * (it would lock out the operator's own MCP tooling).
  */
 export async function GET(request: Request) {
+  // Auth first: unauthenticated requests must not consume the per-IP bucket.
+  const denied = requireApiAuth(request);
+  if (denied) return denied;
+
   const { limited, retryAfterSeconds } = checkRateLimit(clientKey(request));
   if (limited) {
     return NextResponse.json(
@@ -99,8 +103,6 @@ export async function GET(request: Request) {
       { status: 429, headers: { 'Retry-After': String(retryAfterSeconds) } },
     );
   }
-  const denied = requireApiAuth(request);
-  if (denied) return denied;
 
   const url = new URL(request.url);
   const rawStatus = url.searchParams.get('status');

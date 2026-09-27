@@ -118,6 +118,27 @@ test('isPrivateIp blocks private, loopback, and link-local ranges', () => {
   }
 });
 
+test('isPrivateIp blocks NAT64, IPv4-compatible, multicast, and reserved ranges', () => {
+  for (const ip of [
+    // NAT64 well-known prefix (embeds IPv4).
+    '64:ff9b::7f00:1', // -> 127.0.0.1
+    '64:ff9b::a00:1', // -> 10.0.0.1
+    // IPv4-compatible IPv6 (::a.b.c.d).
+    '::7f00:1', // -> 127.0.0.1
+    '::a00:1', // -> 10.0.0.1
+    // IPv6 multicast + documentation.
+    'ff02::1', 'ff00::1',
+    '2001:db8::1',
+    // IPv4 TEST-NET, benchmarking, multicast, reserved.
+    '192.0.2.1', '198.51.100.1', '203.0.113.1',
+    '198.18.0.1', '198.19.255.255',
+    '224.0.0.1', '239.255.255.255',
+    '240.0.0.1', '255.255.255.255',
+  ]) {
+    assert.equal(isPrivateIp(ip), true, `${ip} should be private`);
+  }
+});
+
 test('isPrivateIp allows public addresses', () => {
   for (const ip of ['8.8.8.8', '1.1.1.1', '93.184.216.34', '2606:4700:4700::1111']) {
     assert.equal(isPrivateIp(ip), false, `${ip} should be public`);

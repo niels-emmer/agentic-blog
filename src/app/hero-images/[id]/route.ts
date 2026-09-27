@@ -24,9 +24,13 @@ export async function GET(
     return new NextResponse('Not found', { status: 404 });
   }
 
+  // Content-Type is hardcoded: processImage always re-encodes to webp, so the
+  // stored bytes are never attacker-controlled. Hardcoding here (rather than
+  // trusting the DB column) keeps this route safe even if a future feature
+  // (e.g. import) writes to the table with a different content type.
   return new NextResponse(Buffer.from(image.data), {
     headers: {
-      'Content-Type': image.contentType,
+      'Content-Type': 'image/webp',
       'Content-Length': String(image.sizeBytes),
       'Cache-Control': 'public, max-age=31536000, immutable',
     },

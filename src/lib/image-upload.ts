@@ -1,5 +1,8 @@
 import { lookup } from 'node:dns/promises';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
+import type { IncomingMessage } from 'node:http';
 
 import sharp from 'sharp';
 
@@ -11,8 +14,9 @@ import sharp from 'sharp';
  * - sharp resizes to a bounded hero size and strips metadata (EXIF/GPS) by
  *   default — a privacy win for uploaded photos.
  * - URL fetching is SSRF-guarded: only http(s), private/loopback/link-local
- *   targets are rejected, and redirects are followed manually so every hop
- *   is validated.
+ *   targets are rejected, redirects are followed manually so every hop is
+ *   validated, and the connection is PINNED to the pre-validated IP (closing
+ *   the DNS-rebinding resolve-then-fetch gap).
  */
 
 /** Max width/height after resize — plenty for a 100vw × 120vh hero. */
@@ -20,8 +24,9 @@ export const MAX_HERO_DIMENSION = 1920;
 /** Max bytes accepted from an upload or URL fetch (before resize). */
 export const MAX_SOURCE_BYTES = 10 * 1024 * 1024; // 10 MB
 /** Max pixels sharp will decode (decompression-bomb guard). */
-const MAX_INPUT_PIXELS = 40_000_000; // ~40 MP
+const MAX_INPUT_PIXELS = 25_000_000; // ~25 MP
 const FETCH_TIMEOUT_MS = 10_000;
+const MAX_REDIRECTS = 5;
 
 export interface ProcessedImage {
   data: Uint8Array;
@@ -89,11 +94,18 @@ export async function processImage(buf: Uint8Array): Promise<ProcessedImage> {
     throw new ImageError('could not read image dimensions', 400);
   }
 
-  const data = await sharp(buf, { limitInputPixels: MAX_INPUT_PIXELS })
-    .rotate() // honor EXIF orientation before stripping it
-    .resize({ width: MAX_HERO_DIMENSION, height: MAX_HERO_DIMENSION, fit: 'inside', withoutEnlargement: true })
-    .webp({ quality: 82 })
-    .toBuffer();
+  let data: Buffer;
+  try {
+    data = await sharp(buf, { limitInputPixels: MAX_INPUT_PIXELS })
+      .rotate() // honor EXIF orientation before stripping it
+      .resize({ width: MAX_HERO_DIMENSION, height: MAX_HERO_DIMENSION, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toBuffer();
+  } catch {
+    // Decode can fail only after the metadata pass (e.g. a pixel-limit bomb
+    // or corrupt data that surfaces during decode) — map to a clean 400.
+    throw new ImageError('invalid or corrupt image', 400);
+  }
 
   const out = await sharp(data).metadata();
   return {
@@ -131,24 +143,66 @@ export function isPrivateIp(ip: string): boolean {
       (a === 192 && b === 168) || // 192.168.0.0/16
       (a === 169 && b === 254) || // link-local
       a === 0 || // 0.0.0.0/8
-      (a === 100 && b >= 64 && b <= 127) // 100.64.0.0/10 CGNAT
+      (a === 100 && b >= 64 && b <= 127) || // 100.64.0.0/10 CGNAT
+      (a === 198 && (b === 18 || b === 19)) || // 198.18.0.0/15 benchmarking
+      (a === 192 && b === 0 && parts[2] === 2) || // 192.0.2.0/24 TEST-NET-1
+      (a === 198 && b === 51 && parts[2] === 100) || // 198.51.100.0/24 TEST-NET-2
+      (a === 203 && b === 0 && parts[2] === 113) || // 203.0.113.0/24 TEST-NET-3
+      a >= 224 // multicast 224.0.0.0/4 + reserved 240.0.0.0/4
     );
   }
   if (v === 6) {
     const lower = ip.toLowerCase();
+    const bytes = ipv6ToBytes(lower);
+    if (bytes) {
+      // IPv4-mapped (::ffff:a.b.c.d) — first 10 bytes zero, then ff ff.
+      if (bytes.slice(0, 10).every((b) => b === 0) && bytes[10] === 0xff && bytes[11] === 0xff) {
+        return isPrivateIp(`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`);
+      }
+      // IPv4-compatible (::a.b.c.d, dotted or hex) — first 12 bytes zero.
+      if (bytes.slice(0, 12).every((b) => b === 0)) {
+        return isPrivateIp(`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`);
+      }
+    }
     return (
       lower === '::1' || // loopback
       lower === '::' || // unspecified
       lower.startsWith('fc') || lower.startsWith('fd') || // fc00::/7 unique local
       lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb') || // fe80::/10 link-local
-      lower.startsWith('::ffff:') // IPv4-mapped (checked against the v4 rules below)
+      lower.startsWith('64:ff9b:') || // 64:ff9b::/96 NAT64 (embeds IPv4)
+      lower.startsWith('ff') || // ff00::/8 multicast
+      lower.startsWith('2001:db8:') // 2001:db8::/32 documentation
     );
   }
   return true; // not a valid IP — treat as private
 }
 
+/** Parse an IPv6 address into its 16 bytes, or null if malformed. */
+function ipv6ToBytes(ip: string): number[] | null {
+  let head = ip;
+  let tail = '';
+  const doubleColon = ip.indexOf('::');
+  if (doubleColon !== -1) {
+    head = ip.slice(0, doubleColon);
+    tail = ip.slice(doubleColon + 2);
+  }
+  const headParts = head ? head.split(':').filter(Boolean) : [];
+  const tailParts = tail ? tail.split(':').filter(Boolean) : [];
+  const missing = 8 - headParts.length - tailParts.length;
+  if (missing < 0) return null;
+  const groups = [...headParts, ...Array(missing).fill('0'), ...tailParts];
+  if (groups.length !== 8) return null;
+  const bytes: number[] = [];
+  for (const g of groups) {
+    const value = Number.parseInt(g, 16);
+    if (Number.isNaN(value) || value < 0 || value > 0xffff) return null;
+    bytes.push((value >> 8) & 0xff, value & 0xff);
+  }
+  return bytes;
+}
+
 /** Resolve a hostname and reject it if any address is private/loopback. */
-async function assertPublicHost(hostname: string): Promise<void> {
+async function resolvePublicAddress(hostname: string): Promise<string> {
   let addresses: string[];
   try {
     addresses = (await lookup(hostname, { all: true })).map((a) => a.address);
@@ -157,18 +211,75 @@ async function assertPublicHost(hostname: string): Promise<void> {
   }
   if (addresses.length === 0) throw new ImageError('could not resolve image host', 400);
   for (const addr of addresses) {
-    // IPv4-mapped IPv6 (::ffff:a.b.c.d) — check the embedded v4 address.
-    const v4 = addr.toLowerCase().startsWith('::ffff:') ? addr.slice(7) : addr;
-    if (isPrivateIp(v4)) {
+    if (isPrivateIp(addr)) {
       throw new ImageError('image URL resolves to a private or loopback address', 400);
     }
   }
+  return addresses[0];
+}
+
+interface PinnedResponse {
+  status: number;
+  headers: IncomingMessage['headers'];
+  body: Uint8Array;
+}
+
+/**
+ * Fetch a URL with the connection PINNED to a pre-validated IP. The URL's
+ * hostname is preserved (so TLS SNI + certificate validation still use the
+ * real domain), but DNS resolution is overridden to return only the validated
+ * address — closing the DNS-rebinding resolve-then-fetch gap. The body is
+ * streamed with a hard byte cap and a timeout.
+ */
+function fetchPinned(url: URL, ip: string, timeoutMs: number): Promise<PinnedResponse> {
+  const isHttps = url.protocol === 'https:';
+  const request = isHttps ? httpsRequest : httpRequest;
+  const family = isIP(ip) === 6 ? 6 : 4;
+
+  return new Promise((resolve, reject) => {
+    const req = request(
+      url,
+      {
+        method: 'GET',
+        headers: { accept: 'image/*' },
+        // Override DNS: always return the pre-validated address.
+        lookup: (_hostname, _options, cb) => cb(null, ip, family),
+      },
+      (res) => {
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        res.on('data', (chunk: Buffer) => {
+          total += chunk.length;
+          if (total > MAX_SOURCE_BYTES) {
+            res.destroy();
+            reject(new ImageError('image source exceeds 10 MB', 413));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('end', () => {
+          const body = new Uint8Array(total);
+          let offset = 0;
+          for (const chunk of chunks) {
+            body.set(chunk, offset);
+            offset += chunk.length;
+          }
+          resolve({ status: res.statusCode ?? 0, headers: res.headers, body });
+        });
+        res.on('error', (err) => reject(err));
+      },
+    );
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('request timed out')));
+    req.on('error', (err) => reject(err));
+    req.end();
+  });
 }
 
 /**
  * Fetch an image URL with SSRF protection: http(s) only, private/loopback
- * targets rejected, redirects followed manually so every hop is validated,
- * response size capped, and a hard timeout.
+ * targets rejected, the connection pinned to the validated IP (DNS-rebinding
+ * safe), redirects followed manually with every hop validated, response size
+ * capped while streaming, and a hard timeout.
  */
 export async function fetchImageUrl(rawUrl: string): Promise<Uint8Array> {
   let url: URL;
@@ -177,43 +288,38 @@ export async function fetchImageUrl(rawUrl: string): Promise<Uint8Array> {
   } catch {
     throw new ImageError('url must be a valid http(s) URL', 400);
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new ImageError('url must be an http(s) URL', 400);
-  }
 
   let current: URL = url;
-  for (let hop = 0; hop < 5; hop++) {
-    await assertPublicHost(current.hostname);
+  for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
+    // Validate the protocol on EVERY hop (redirects can change scheme).
+    if (current.protocol !== 'http:' && current.protocol !== 'https:') {
+      throw new ImageError('url must be an http(s) URL', 400);
+    }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    let res: Response;
+    const ip = await resolvePublicAddress(current.hostname);
+
+    let res: PinnedResponse;
     try {
-      res = await fetch(current, {
-        redirect: 'manual',
-        signal: controller.signal,
-        headers: { accept: 'image/*' },
-      });
-    } catch {
+      res = await fetchPinned(current, ip, FETCH_TIMEOUT_MS);
+    } catch (error) {
+      if (error instanceof ImageError) throw error;
       throw new ImageError('failed to fetch image URL', 400);
-    } finally {
-      clearTimeout(timer);
     }
 
     if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get('location');
+      const location = res.headers.location;
       if (!location) throw new ImageError('image URL redirect without a target', 400);
-      current = new URL(location, current);
+      try {
+        current = new URL(location, current);
+      } catch {
+        throw new ImageError('invalid redirect target', 400);
+      }
       continue;
     }
-    if (!res.ok) throw new ImageError(`image URL returned HTTP ${res.status}`, 400);
-
-    const contentLength = Number(res.headers.get('content-length') ?? 0);
-    if (contentLength > MAX_SOURCE_BYTES) throw new ImageError('image source exceeds 10 MB', 413);
-
-    const buf = new Uint8Array(await res.arrayBuffer());
-    if (buf.length > MAX_SOURCE_BYTES) throw new ImageError('image source exceeds 10 MB', 413);
-    return buf;
+    if (res.status < 200 || res.status >= 300) {
+      throw new ImageError(`image URL returned HTTP ${res.status}`, 400);
+    }
+    return res.body;
   }
   throw new ImageError('too many redirects', 400);
 }

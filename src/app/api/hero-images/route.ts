@@ -30,6 +30,11 @@ function sanitizeName(raw: string): string {
  * edge, re-encoded to webp, and stripped of metadata before storage.
  */
 export async function POST(request: Request) {
+  // Auth first: unauthenticated requests must not consume the per-IP bucket
+  // (an attacker sharing the operator's client key could exhaust it).
+  const denied = requireApiAuth(request);
+  if (denied) return denied;
+
   const { limited, retryAfterSeconds } = checkRateLimit(clientKey(request));
   if (limited) {
     return NextResponse.json(
@@ -37,8 +42,6 @@ export async function POST(request: Request) {
       { status: 429, headers: { 'Retry-After': String(retryAfterSeconds) } },
     );
   }
-  const denied = requireApiAuth(request);
-  if (denied) return denied;
 
   const contentType = request.headers.get('content-type') ?? '';
   const normalized = contentType.toLowerCase();
@@ -117,6 +120,9 @@ export async function POST(request: Request) {
 
 /** List hero image metadata (no blobs). Token-gated. */
 export async function GET(request: Request) {
+  const denied = requireApiAuth(request);
+  if (denied) return denied;
+
   const { limited, retryAfterSeconds } = checkRateLimit(clientKey(request));
   if (limited) {
     return NextResponse.json(
@@ -124,8 +130,6 @@ export async function GET(request: Request) {
       { status: 429, headers: { 'Retry-After': String(retryAfterSeconds) } },
     );
   }
-  const denied = requireApiAuth(request);
-  if (denied) return denied;
 
   return NextResponse.json({ heroImages: listHeroImages() });
 }

@@ -13,6 +13,10 @@ export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  // Auth first: unauthenticated requests must not consume the per-IP bucket.
+  const denied = requireApiAuth(request);
+  if (denied) return denied;
+
   const { limited, retryAfterSeconds } = checkRateLimit(clientKey(request));
   if (limited) {
     return NextResponse.json(
@@ -20,8 +24,6 @@ export async function DELETE(
       { status: 429, headers: { 'Retry-After': String(retryAfterSeconds) } },
     );
   }
-  const denied = requireApiAuth(request);
-  if (denied) return denied;
 
   const { id: rawId } = await params;
   const id = Number(rawId);
