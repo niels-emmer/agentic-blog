@@ -52,10 +52,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Security
 - SSRF guard on hero-image URL sources: private/loopback/link-local targets
-  rejected (incl. IPv4-mapped IPv6), redirects followed manually with each
-  hop validated, 10 MB source cap, decompression-bomb pixel cap.
+  rejected (incl. IPv4-mapped and IPv4-compatible IPv6, NAT64, TEST-NET,
+  multicast, and reserved ranges), the connection is **pinned to the
+  pre-validated IP** (closing the DNS-rebinding resolve-then-fetch gap),
+  redirects are followed manually with each hop validated, the response body
+  is size-capped while streaming, and a decompression-bomb pixel cap applies.
 - Feedback POST content-type check is an exact `application/json` match
   (allowing charset), not a substring match.
+- Auth is checked before rate limiting on all token-gated handlers, so
+  unauthenticated requests cannot exhaust a per-IP bucket.
+- The public `/hero-images/{id}` route hardcodes `Content-Type: image/webp`
+  (stored bytes are always sharp-produced webp).
 
 ### Documentation
 - README homepage screenshot refreshed; Direct HTTP endpoint list expanded
