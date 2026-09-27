@@ -56,10 +56,15 @@ git push, no rebuild.
   `list_feedback`, `update_feedback_status`, `add_hero_image`,
   `list_hero_images`, `delete_hero_image`. See
   [`mcp-server/README.md`](mcp-server/README.md).
-- **Direct HTTP:** the content API (`POST/PATCH/DELETE /api/articles`,
-  `GET/PATCH /api/site-config`, `GET /api/export`, `POST /api/import`),
-  bearer-token auth. See [`API.md`](API.md) and the machine-readable OpenAPI
-  spec at `/openapi.json` (local dev: `http://localhost:3000/openapi.json`).
+- **Direct HTTP:** the content API — articles (`GET/POST/PATCH/DELETE
+  /api/articles`, `GET/PATCH/DELETE /api/articles/{slug}`), site config
+  (`GET/PATCH /api/site-config`), export/import (`GET /api/export`,
+  `POST /api/import`), feedback (`POST /api/feedback` public;
+  `GET /api/feedback`, `PATCH /api/feedback/{id}` token-gated), and hero
+  images (`POST/GET /api/hero-images`, `DELETE /api/hero-images/{id}`,
+  public bytes at `/hero-images/{id}`) — bearer-token auth. See
+  [`API.md`](API.md) and the machine-readable OpenAPI spec at
+  `/openapi.json` (local dev: `http://localhost:3000/openapi.json`).
 
 Site chrome (title, hero copy, footer, robots indexing toggle, homepage cap,
 feed toggle) and the runtime **theme** (colors, fonts, hero image) are
