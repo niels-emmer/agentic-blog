@@ -443,6 +443,44 @@ function createServer() {
     },
   );
 
+  server.registerTool(
+    'list_feedback',
+    {
+      title: 'List feedback',
+      description:
+        'List feedback submissions, newest first. Optional status filter (new, acknowledged, archived) and limit (1-100, default 50). Feedback is private to the operator — never rendered on the site.',
+      inputSchema: {
+        status: z.enum(['new', 'acknowledged', 'archived']).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ status, limit }) => {
+      const qs = new URLSearchParams();
+      if (status) qs.set('status', status);
+      if (limit) qs.set('limit', String(limit));
+      const query = qs.toString();
+      const data = await api(`/api/feedback${query ? `?${query}` : ''}`);
+      return { content: [{ type: 'text', text: JSON.stringify(data.feedback, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    'update_feedback_status',
+    {
+      title: 'Update feedback status',
+      description:
+        'Mark a feedback submission as acknowledged or archived by its id. Use list_feedback to find ids.',
+      inputSchema: {
+        id: z.number().int().positive(),
+        status: z.enum(['new', 'acknowledged', 'archived']),
+      },
+    },
+    async ({ id, status }) => {
+      const data = await api(`/api/feedback/${id}`, { method: 'PATCH', body: { status } });
+      return { content: [{ type: 'text', text: JSON.stringify(data.feedback, null, 2) }] };
+    },
+  );
+
   return server;
 }
 

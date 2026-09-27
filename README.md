@@ -52,7 +52,8 @@ git push, no rebuild.
 - **Agents (preferred):** use the MCP server — `publish_article`,
   `update_article`, `delete_article`, `list_articles`,
   `get_article`, `search_articles`, `get_site_config`,
-  `update_site_config`, `export_content`, `import_content`. See
+  `update_site_config`, `export_content`, `import_content`,
+  `list_feedback`, `update_feedback_status`. See
   [`mcp-server/README.md`](mcp-server/README.md).
 - **Direct HTTP:** the content API (`POST/PATCH/DELETE /api/articles`,
   `GET/PATCH /api/site-config`, `GET /api/export`, `POST /api/import`),
@@ -66,6 +67,16 @@ config-driven from a single `site_config` row in SQLite — update them via
 apply instantly. An RSS feed is available at `/feed.xml` when `feedEnabled`
 is on (default off). `robotsIndex` defaults to false (private posture) —
 flip it to allow crawling.
+
+## Feedback
+
+Readers can send corrections or comments from the `/feedback` page (linked in
+the footer and on every article). Submissions are the site's only
+unauthenticated write, protected by a honeypot field and a strict per-IP rate
+limit (5 / 10 min); they are stored in SQLite and **never rendered on the
+site**. The operator reads and triages them via the token-gated
+`GET/PATCH /api/feedback` endpoints or the `list_feedback` /
+`update_feedback_status` MCP tools.
 
 ## Search
 

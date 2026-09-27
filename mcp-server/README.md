@@ -75,6 +75,8 @@ automatically via `tools/list` — no manual tool registration needed.
 | `update_site_config` | **Partial update** of site configuration — only provided fields change. Unknown fields rejected. `theme` accepts `colors` (hex), `fonts` (allow-list), `heroImageUrl` |
 | `export_content` | Export all content as JSON (every article + site config) — the input to `import_content` |
 | `import_content` | **Merge by slug** — existing slugs full-replaced, new slugs created; nothing deleted unless `deleteMissing: true`. Validates every entry; any invalid entry rejects the whole import. Optional `siteConfig` patch |
+| `list_feedback` | List feedback submissions, newest first. Optional `status` filter (`new`/`acknowledged`/`archived`) and `limit` (1–100). Feedback is private to the operator — never rendered on the site |
+| `update_feedback_status` | Mark a feedback submission `acknowledged` or `archived` by its `id` (find ids via `list_feedback`) |
 
 The authoritative tool schemas are served by the server itself (`tools/list`
 returns each tool's input schema). The `article` input shape matches the

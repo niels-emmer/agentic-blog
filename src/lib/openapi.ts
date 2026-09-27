@@ -57,6 +57,32 @@ const bearerAuth = {
     'Bearer token set via the CONTENT_API_TOKEN env var. The API returns 503 when the token is unset, 401 on missing/wrong token.',
 } as const;
 
+const feedbackSchema = {
+  type: 'object',
+  required: ['id', 'message', 'status', 'createdAt'],
+  properties: {
+    id: { type: 'integer', description: 'Feedback id (used to update status)' },
+    articleSlug: { type: 'string', description: 'Optional slug of the article the feedback is about' },
+    name: { type: 'string', description: 'Optional submitter name' },
+    email: { type: 'string', description: 'Optional submitter email (only used to reply)' },
+    message: { type: 'string', description: 'The feedback message' },
+    status: { type: 'string', enum: ['new', 'acknowledged', 'archived'] },
+    createdAt: { type: 'string', description: 'ISO timestamp of the submission' },
+  },
+} as const;
+
+const feedbackSubmissionSchema = {
+  type: 'object',
+  required: ['message'],
+  properties: {
+    message: { type: 'string', minLength: 1, maxLength: 5000, description: 'The feedback message (required)' },
+    name: { type: 'string', maxLength: 100, description: 'Optional' },
+    email: { type: 'string', maxLength: 200, description: 'Optional; must be a valid email address' },
+    articleSlug: { type: 'string', maxLength: 100, pattern: '^[a-z0-9-]+$', description: 'Optional slug of the article the feedback is about' },
+    website: { type: 'string', description: 'Honeypot — must be left empty. Non-empty values are silently discarded and never stored.' },
+  },
+} as const;
+
 const siteConfigSchema = {
   type: 'object',
   required: [
@@ -119,7 +145,7 @@ export const openApiSpec = {
     title: 'Agentic Blog — Content API',
     version: '0.1.0',
     description:
-      'Publish, edit, and delete articles on an Agentic Blog. Content is stored in SQLite and the site reflects changes immediately — no rebuild required. All endpoints require a bearer token except GET /api/search, which is public for site readers.',
+      'Publish, edit, and delete articles on an Agentic Blog. Content is stored in SQLite and the site reflects changes immediately — no rebuild required. All endpoints require a bearer token except GET /api/search and POST /api/feedback, which are public for site readers.',
   },
   servers: [{ url: '/' }],
   paths: {
@@ -440,9 +466,120 @@ status: { type: 'string', enum: ['published'], description: 'Always published �
         },
       },
     },
+    '/api/feedback': {
+      post: {
+        summary: 'Submit feedback (public)',
+        description:
+          'Public feedback submission — the only unauthenticated write on the site. No bearer token required. Spam controls: a hidden `website` honeypot field (filled values are silently accepted and never stored) and a strict rate limit (5 submissions / 10 min / client IP). Stores the message in SQLite.',
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: feedbackSubmissionSchema } },
+        },
+        responses: {
+          '201': {
+            description: 'Created',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { ok: { type: 'boolean' }, id: { type: 'integer' } },
+                },
+              },
+            },
+          },
+          '400': { description: 'Validation failed (details in response body)' },
+          '413': { description: 'Request body too large (> 64 KB)' },
+          '415': { description: 'Content-Type must be application/json' },
+          '429': { description: 'Rate limited (5 / 10 min / IP)' },
+        },
+      },
+      get: {
+        summary: 'List feedback submissions',
+        description:
+          'List feedback submissions, newest first. Token-gated — feedback is private to the operator and never rendered on the site.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'status',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', enum: ['new', 'acknowledged', 'archived'] },
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', minimum: 1, maximum: 100 },
+            description: 'Max results (default 50)',
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { feedback: { type: 'array', items: feedbackSchema } },
+                },
+              },
+            },
+          },
+          '400': { description: 'Invalid status filter' },
+          '401': { description: 'Missing or invalid bearer token' },
+          '429': { description: 'Rate limited' },
+          '503': { description: 'API not configured (CONTENT_API_TOKEN unset)' },
+        },
+      },
+    },
+    '/api/feedback/{id}': {
+      patch: {
+        summary: 'Update feedback status',
+        description:
+          'Mark a feedback submission as acknowledged or archived. Token-gated.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['status'],
+                properties: {
+                  status: { type: 'string', enum: ['new', 'acknowledged', 'archived'] },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { feedback: feedbackSchema },
+                },
+              },
+            },
+          },
+          '400': { description: 'Invalid id or status' },
+          '401': { description: 'Missing or invalid bearer token' },
+          '404': { description: 'Not found' },
+          '503': { description: 'API not configured (CONTENT_API_TOKEN unset)' },
+        },
+      },
+    },
   },
   components: {
     securitySchemes: { bearerAuth },
-    schemas: { Article: articleSchema, SiteConfig: siteConfigSchema },
+    schemas: {
+      Article: articleSchema,
+      SiteConfig: siteConfigSchema,
+      Feedback: feedbackSchema,
+      FeedbackSubmission: feedbackSubmissionSchema,
+    },
   },
 } as const;

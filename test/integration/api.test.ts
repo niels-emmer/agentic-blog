@@ -620,3 +620,176 @@ test('status index pages list published articles and 404 on unknown status', asy
   const bogus = await fetch(`${BASE}/status/bogus`);
   assert.equal(bogus.status, 404);
 });
+
+// ---------------------------------------------------------------------------
+// Feedback
+// ---------------------------------------------------------------------------
+
+test('POST /api/feedback is public and stores a submission', async () => {
+  // No bearer token — submission is unauthenticated by design. Isolated
+  // X-Forwarded-For so the strict per-IP rate limit does not bleed between
+  // tests (the test server has no proxy, so all requests would otherwise
+  // share one bucket).
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.10' };
+  const res = await fetch(`${BASE}/api/feedback`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      message: 'Correction on the sample entry.',
+      name: 'Integration Tester',
+      email: 'tester@example.com',
+      articleSlug: 'welcome',
+    }),
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { ok: boolean; id: number };
+  assert.equal(body.ok, true);
+  assert.ok(Number.isInteger(body.id) && body.id > 0);
+});
+
+test('POST /api/feedback silently discards honeypot submissions', async () => {
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.11' };
+  const res = await fetch(`${BASE}/api/feedback`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message: 'spam', website: 'http://spam.example' }),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { ok: boolean };
+  assert.equal(body.ok, true);
+
+  // The honeypot submission must not appear in the inbox.
+  const inbox = await fetch(`${BASE}/api/feedback`, { headers: authHeaders() });
+  const inboxBody = (await inbox.json()) as { feedback: { message: string }[] };
+  assert.ok(!inboxBody.feedback.some((f) => f.message === 'spam'));
+});
+
+test('POST /api/feedback discards non-string honeypot values too', async () => {
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.12' };
+  for (const website of [true, 123, ['x'], { url: 'x' }]) {
+    const res = await fetch(`${BASE}/api/feedback`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ message: 'spam', website }),
+    });
+    assert.equal(res.status, 200, `honeypot value ${JSON.stringify(website)} should be discarded`);
+  }
+});
+
+test('POST /api/feedback rejects non-JSON content types with 415', async () => {
+  const headers = { 'content-type': 'text/plain', 'x-forwarded-for': '198.51.100.13' };
+  const res = await fetch(`${BASE}/api/feedback`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message: 'cross-origin spam' }),
+  });
+  assert.equal(res.status, 415);
+});
+
+test('POST /api/feedback strict rate limit holds even after priming via /api/search', async () => {
+  // The strict feedback bucket must not be primed away by the laxer default
+  // bucket: hit the public search endpoint first, then verify the feedback
+  // cap (5 / 10 min) still applies to the same client key.
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.99' };
+  const prime = await fetch(`${BASE}/api/search?q=sample`, { headers });
+  assert.equal(prime.status, 200);
+
+  let lastStatus = 0;
+  for (let i = 0; i < 6; i++) {
+    const res = await fetch(`${BASE}/api/feedback`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ message: `rate test ${i}` }),
+    });
+    lastStatus = res.status;
+    if (res.status === 429) break;
+  }
+  assert.equal(lastStatus, 429, '6th feedback submission should be rate limited');
+});
+
+test('POST /api/feedback rejects invalid bodies with 400', async () => {
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.14' };
+  const res = await fetch(`${BASE}/api/feedback`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message: '', email: 'not-an-email' }),
+  });
+  assert.equal(res.status, 400);
+  const body = (await res.json()) as { details?: string[] };
+  assert.ok(Array.isArray(body.details) && body.details.length > 0);
+});
+
+test('GET /api/feedback requires auth (401)', async () => {
+  const res = await fetch(`${BASE}/api/feedback`);
+  assert.equal(res.status, 401);
+});
+
+test('GET /api/feedback lists submissions with auth', async () => {
+  const res = await fetch(`${BASE}/api/feedback`, { headers: authHeaders() });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    feedback: { message: string; status: string; articleSlug?: string }[];
+  };
+  assert.ok(Array.isArray(body.feedback) && body.feedback.length > 0);
+  const hit = body.feedback.find((f) => f.message === 'Correction on the sample entry.');
+  assert.ok(hit, 'submitted feedback should be listed');
+  assert.equal(hit.status, 'new');
+  assert.equal(hit.articleSlug, 'welcome');
+});
+
+test('GET /api/feedback filters by status and rejects bad status', async () => {
+  const res = await fetch(`${BASE}/api/feedback?status=new`, { headers: authHeaders() });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { feedback: { status: string }[] };
+  assert.ok(body.feedback.every((f) => f.status === 'new'));
+
+  const bad = await fetch(`${BASE}/api/feedback?status=bogus`, { headers: authHeaders() });
+  assert.equal(bad.status, 400);
+});
+
+test('PATCH /api/feedback/{id} requires auth and updates status', async () => {
+  // Find a submission id first.
+  const inbox = await fetch(`${BASE}/api/feedback`, { headers: authHeaders() });
+  const inboxBody = (await inbox.json()) as { feedback: { id: number }[] };
+  const id = inboxBody.feedback[0].id;
+
+  const noAuth = await fetch(`${BASE}/api/feedback/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'acknowledged' }),
+  });
+  assert.equal(noAuth.status, 401);
+
+  const res = await fetch(`${BASE}/api/feedback/${id}`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({ status: 'acknowledged' }),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { feedback: { id: number; status: string } };
+  assert.equal(body.feedback.id, id);
+  assert.equal(body.feedback.status, 'acknowledged');
+});
+
+test('PATCH /api/feedback/{id} rejects bad id, bad status, and unknown id', async () => {
+  const badId = await fetch(`${BASE}/api/feedback/not-a-number`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({ status: 'new' }),
+  });
+  assert.equal(badId.status, 400);
+
+  const badStatus = await fetch(`${BASE}/api/feedback/1`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({ status: 'bogus' }),
+  });
+  assert.equal(badStatus.status, 400);
+
+  const unknown = await fetch(`${BASE}/api/feedback/999999`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({ status: 'new' }),
+  });
+  assert.equal(unknown.status, 404);
+});

@@ -47,7 +47,8 @@ for content changes. Publish/edit/delete via the content API or the MCP server
 - **MCP server** (`mcp-server/`) → thin HTTP client over the content API:
   `publish_article`, `update_article`, `delete_article`, `list_articles`,
   `get_article`, `search_articles`, `get_site_config`, `update_site_config`,
-  `export_content`, `import_content`. See `mcp-server/README.md`.
+  `export_content`, `import_content`, `list_feedback`,
+  `update_feedback_status`. See `mcp-server/README.md`.
 - **Article shape** → `src/content/articles.ts` (types only). `status` is
   `draft` | `published` | `archived`; only `published` articles render on the
   public site (homepage, article pages, tag pages, status pages, RSS feed) —
@@ -68,6 +69,12 @@ for content changes. Publish/edit/delete via the content API or the MCP server
   default → gradient overlays only). See `src/lib/hero-image.ts`.
 - **Export/import** → `GET /api/export` / `POST /api/import` (merge-by-slug
   upsert, transactional, never deletes unless `deleteMissing: true`).
+- **Feedback** → public `/feedback` page + `POST /api/feedback` (the only
+  unauthenticated write; honeypot + strict 5/10min/IP rate limit, 415 on
+  non-JSON, 64 KB body cap). `GET /api/feedback` and
+  `PATCH /api/feedback/{id}` are token-gated; feedback is stored in SQLite
+  and never rendered on the site. Read it via the MCP tools
+  `list_feedback` / `update_feedback_status`.
 - **Fresh DB starts empty**; `SEED_SAMPLE=1` seeds one generic sample entry.
   Site identity seeds from `SITE_TITLE` / `SITE_URL` / `SITE_DESCRIPTION` env
   vars on first boot (`seedSiteConfigIfEmpty` in `src/lib/db.ts`).

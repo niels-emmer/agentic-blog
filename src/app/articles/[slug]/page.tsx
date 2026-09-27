@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { ArticleBody, statusLabel } from '@/components/ArticleBody';
@@ -44,6 +45,14 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
           subtitle={article.dek}
         />
         <ArticleBody article={article} />
+        <div className="mx-auto max-w-3xl px-6 pb-8 sm:px-10">
+          <Link
+            href={`/feedback?article=${article.slug}`}
+            className="font-mono text-xs text-muted transition hover:text-signal"
+          >
+            Send feedback about this article →
+          </Link>
+        </div>
       </main>
       <SiteFooter />
     </div>
