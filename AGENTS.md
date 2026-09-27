@@ -57,6 +57,11 @@ for content changes. Publish/edit/delete via the content API or the MCP server
   fonts, `heroImageUrl`). Update via `PATCH /api/site-config` or
   `update_site_config`. `robotsIndex` defaults false (private posture);
   `feedEnabled` defaults off (`/feed.xml` 404s).
+- **Hero background rotation** → every page renders a hero background picked
+  at request time from any `public/hero-bg-*` image (jpg/png/webp/avif/gif).
+  Dropping a new file into `public/` makes it a candidate — no code change.
+  Falls back to `theme.heroImageUrl` when no candidates exist (empty by
+  default → gradient overlays only). See `src/lib/hero-image.ts`.
 - **Export/import** → `GET /api/export` / `POST /api/import` (merge-by-slug
   upsert, transactional, never deletes unless `deleteMissing: true`).
 - **Fresh DB starts empty**; `SEED_SAMPLE=1` seeds one generic sample entry.

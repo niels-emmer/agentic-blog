@@ -14,11 +14,11 @@ export default function Home() {
     .slice(0, config.homepageCap);
 
   return (
-    <div className="flex min-h-screen flex-col bg-ink">
+    <div className="relative isolate flex min-h-screen flex-col bg-ink">
+      <HeroVisual />
       <SiteHeader overlay />
       <main className="flex-1">
-        <section className="relative isolate overflow-hidden border-b border-white/10 px-6 pb-16 pt-40 sm:px-10 sm:pt-56">
-          <HeroVisual heroImageUrl={config.theme.heroImageUrl} />
+        <section className="px-6 pb-16 pt-40 sm:px-10 sm:pt-56">
           <div className="relative mx-auto max-w-3xl">
             <p className="font-mono text-xs uppercase tracking-[0.3em] text-signal">{config.heroKicker}</p>
             <h1 className="mt-4 font-display text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
@@ -39,7 +39,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="border-t border-white/10 px-6 py-4 sm:px-10">
+        <section className="px-6 py-4 sm:px-10">
           <div className="mx-auto max-w-3xl">
             <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-muted">Articles</h2>
             <div className="mt-4">
