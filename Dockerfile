@@ -22,8 +22,10 @@ COPY --from=builder /app/next.config.ts ./next.config.ts
 
 # Run as the unprivileged `node` user (uid 1000). The /data volume must be
 # writable by that uid — with a named volume Docker inherits this ownership;
-# with a host bind mount, chown the host directory to uid 1000.
-RUN mkdir -p /data && chown -R node:node /data
+# with a host bind mount, chown the host directory to uid 1000. The image
+# optimizer also needs to write its cache under /app/.next, which the build
+# stage leaves root-owned.
+RUN mkdir -p /data && chown -R node:node /data /app/.next
 USER node
 
 VOLUME /data
