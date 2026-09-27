@@ -9,6 +9,10 @@
 
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS_PER_WINDOW = 120;
+// Hard ceiling on tracked windows so a flood of distinct keys (spoofed
+// X-Forwarded-For behind a misconfigured proxy, or a large botnet) cannot
+// grow the map without bound. Oldest entries are evicted first.
+const MAX_WINDOWS = 10_000;
 
 interface Window {
   count: number;
@@ -23,6 +27,12 @@ function prune(): void {
   const now = Date.now();
   for (const [key, window] of windows) {
     if (window.resetAt <= now) windows.delete(key);
+  }
+  // Evict oldest entries beyond the cap (Map preserves insertion order).
+  while (windows.size > MAX_WINDOWS) {
+    const oldest = windows.keys().next().value;
+    if (oldest === undefined) break;
+    windows.delete(oldest);
   }
 }
 
@@ -84,3 +94,15 @@ export function clientKey(request: Request): string {
 
 // Keep the map from growing unboundedly across long-running processes.
 setInterval(prune, WINDOW_MS).unref();
+
+// TRUST_PROXY=1 keys rate limits on the last X-Forwarded-For hop. That is
+// only sound when the app is reachable exclusively through a proxy that
+// appends the real client address; direct exposure would let a client send a
+// fresh header per request and get an unlimited budget. Warn loudly so a
+// misconfiguration is visible.
+if (process.env.TRUST_PROXY === '1') {
+  console.warn(
+    '[rate-limit] TRUST_PROXY=1: rate limits key on the last X-Forwarded-For hop. ' +
+      'Verify the app is ONLY reachable through the proxy — direct exposure voids per-IP limits.',
+  );
+}

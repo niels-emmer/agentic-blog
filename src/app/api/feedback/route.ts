@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { requireApiAuth } from '@/lib/api-auth';
-import { createFeedback, listFeedback, type FeedbackStatus } from '@/lib/db';
+import { createFeedback, getArticle, listFeedback, type FeedbackStatus } from '@/lib/db';
 import { checkRateLimit, clientKey } from '@/lib/rate-limit';
 import { readJsonBody } from '@/lib/read-body';
 import { validateFeedback } from '@/lib/validation';
@@ -36,9 +36,12 @@ export async function POST(request: Request) {
 
   // Reject non-JSON content types: cross-origin `text/plain` fetches are
   // CORS-safelisted (no preflight) and would otherwise be accepted. Requiring
-  // application/json forces a preflight the server never answers.
+  // application/json forces a preflight the server never answers. Exact match
+  // (allowing the charset parameter) so `application/json-patch+json` and
+  // similar vendor types are not accepted.
   const contentType = request.headers.get('content-type') ?? '';
-  if (!contentType.toLowerCase().includes('application/json')) {
+  const normalized = contentType.toLowerCase();
+  if (normalized !== 'application/json' && !normalized.startsWith('application/json;')) {
     return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 });
   }
 
@@ -67,7 +70,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Validation failed', details: result.errors }, { status: 400 });
   }
 
-  const feedback = createFeedback(result.value);
+  // The feedback table's article_slug FK rejects slugs that don't exist in
+  // `articles`. Rather than surface a 500 (or a 400 that doubles as a
+  // slug-existence oracle), drop the association and store the feedback
+  // alone — the message is the content, and the FK already tolerates missing
+  // articles at read time (ON DELETE SET NULL). The response is uniformly
+  // 201 for every valid submission.
+  const value = result.value;
+  if (value.articleSlug !== undefined && !getArticle(value.articleSlug)) {
+    value.articleSlug = undefined;
+  }
+
+  const feedback = createFeedback(value);
   return NextResponse.json({ ok: true, id: feedback.id }, { status: 201 });
 }
 

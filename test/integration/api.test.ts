@@ -719,6 +719,27 @@ test('POST /api/feedback rejects invalid bodies with 400', async () => {
   assert.ok(Array.isArray(body.details) && body.details.length > 0);
 });
 
+test('POST /api/feedback with a non-existent articleSlug still succeeds (no 500, no oracle)', async () => {
+  // The feedback table's FK rejects unknown slugs; the route must drop the
+  // association and store the feedback alone — uniformly 201, never a 500
+  // (and never a 400 that would reveal whether a slug exists).
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.15' };
+  const res = await fetch(`${BASE}/api/feedback`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message: 'Feedback about a deleted article.', articleSlug: 'no-such-article' }),
+  });
+  assert.equal(res.status, 201);
+
+  const inbox = await fetch(`${BASE}/api/feedback`, { headers: authHeaders() });
+  const inboxBody = (await inbox.json()) as {
+    feedback: { message: string; articleSlug?: string }[];
+  };
+  const hit = inboxBody.feedback.find((f) => f.message === 'Feedback about a deleted article.');
+  assert.ok(hit, 'feedback should be stored');
+  assert.equal(hit.articleSlug, undefined, 'unknown slug must be dropped, not stored');
+});
+
 test('GET /api/feedback requires auth (401)', async () => {
   const res = await fetch(`${BASE}/api/feedback`);
   assert.equal(res.status, 401);

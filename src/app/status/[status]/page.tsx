@@ -29,7 +29,7 @@ export async function generateMetadata({
   params: Promise<{ status: string }>;
 }): Promise<Metadata> {
   const { status } = await params;
-  const statusValue = STATUS_BY_SLUG[status];
+  const statusValue = Object.hasOwn(STATUS_BY_SLUG, status) ? STATUS_BY_SLUG[status] : undefined;
   const siteTitle = getSiteConfig().siteTitle;
   return {
     title: statusValue ? `${STATUS_LABELS[statusValue]} — ${siteTitle}` : `Not found — ${siteTitle}`,
@@ -38,7 +38,9 @@ export async function generateMetadata({
 
 export default async function StatusPage({ params }: { params: Promise<{ status: string }> }) {
   const { status } = await params;
-  const statusValue = STATUS_BY_SLUG[status];
+  // Object.hasOwn guards against prototype keys (/status/__proto__ etc.)
+  // resolving to truthy inherited values.
+  const statusValue = Object.hasOwn(STATUS_BY_SLUG, status) ? STATUS_BY_SLUG[status] : undefined;
 
   if (!statusValue) {
     notFound();
