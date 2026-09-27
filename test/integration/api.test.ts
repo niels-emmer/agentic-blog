@@ -572,3 +572,34 @@ test('GET /api/articles?q= requires auth and searches every status', async () =>
   const bad = await fetch(`${BASE}/api/articles?q=a`, { headers: authHeaders() });
   assert.equal(bad.status, 400);
 });
+
+test('homepage paginates at homepageCap with /?page=N', async () => {
+  // homepageCap defaults to 25 — publish 26 published articles so the
+  // homepage spans two pages.
+  for (let i = 0; i < 26; i++) {
+    const res = await fetch(`${BASE}/api/articles`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        ...sample,
+        title: `Pagination entry ${i}`,
+        logged: `2026-09-${String((i % 28) + 1).padStart(2, '0')}`,
+        sections: [{ heading: 'H', paragraphs: [`Pagination body ${i}.`] }],
+      }),
+    });
+    assert.equal(res.status, 201);
+  }
+
+  const page1 = await fetch(`${BASE}/`);
+  const page1Html = (await page1.text()).replace(/<!--.*?-->/g, '');
+  assert.match(page1Html, /Page 1 of 2/);
+
+  const page2 = await fetch(`${BASE}/?page=2`);
+  assert.equal(page2.status, 200);
+  const page2Html = (await page2.text()).replace(/<!--.*?-->/g, '');
+  assert.match(page2Html, /Page 2 of 2/);
+
+  // The newest entry lives on page 1 only.
+  assert.match(page1Html, /Pagination entry 25/);
+  assert.doesNotMatch(page2Html, /Pagination entry 25/);
+});
