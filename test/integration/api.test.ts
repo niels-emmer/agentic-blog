@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import sharp from 'sharp';
 
 /**
  * Integration layer: builds (via `npm run test:integration`) and starts the
@@ -571,4 +572,379 @@ test('GET /api/articles?q= requires auth and searches every status', async () =>
   // Invalid query length → 400.
   const bad = await fetch(`${BASE}/api/articles?q=a`, { headers: authHeaders() });
   assert.equal(bad.status, 400);
+});
+
+test('homepage paginates at homepageCap with /?page=N', async () => {
+  // homepageCap defaults to 25 — publish 26 published articles so the
+  // homepage spans two pages.
+  for (let i = 0; i < 26; i++) {
+    const res = await fetch(`${BASE}/api/articles`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        ...sample,
+        title: `Pagination entry ${i}`,
+        logged: `2026-09-${String((i % 28) + 1).padStart(2, '0')}`,
+        sections: [{ heading: 'H', paragraphs: [`Pagination body ${i}.`] }],
+      }),
+    });
+    assert.equal(res.status, 201);
+  }
+
+  const page1 = await fetch(`${BASE}/`);
+  const page1Html = (await page1.text()).replace(/<!--.*?-->/g, '');
+  assert.match(page1Html, /Page 1 of 2/);
+
+  const page2 = await fetch(`${BASE}/?page=2`);
+  assert.equal(page2.status, 200);
+  const page2Html = (await page2.text()).replace(/<!--.*?-->/g, '');
+  assert.match(page2Html, /Page 2 of 2/);
+
+  // The newest entry lives on page 1 only.
+  assert.match(page1Html, /Pagination entry 25/);
+  assert.doesNotMatch(page2Html, /Pagination entry 25/);
+});
+
+test('status index pages list published articles and 404 on unknown status', async () => {
+  const published = await fetch(`${BASE}/status/published`);
+  assert.equal(published.status, 200);
+  const publishedHtml = (await published.text()).replace(/<!--.*?-->/g, '');
+  assert.match(publishedHtml, /Published/);
+  assert.match(publishedHtml, /Pagination entry 25/);
+
+  // Drafts never render on the public site, so the draft status page is empty.
+  const draft = await fetch(`${BASE}/status/draft`);
+  assert.equal(draft.status, 200);
+  const draftHtml = (await draft.text()).replace(/<!--.*?-->/g, '');
+  assert.doesNotMatch(draftHtml, /draft-quasar-notes/);
+
+  const bogus = await fetch(`${BASE}/status/bogus`);
+  assert.equal(bogus.status, 404);
+});
+
+// ---------------------------------------------------------------------------
+// Feedback
+// ---------------------------------------------------------------------------
+
+test('POST /api/feedback is public and stores a submission', async () => {
+  // No bearer token — submission is unauthenticated by design. Isolated
+  // X-Forwarded-For so the strict per-IP rate limit does not bleed between
+  // tests (the test server has no proxy, so all requests would otherwise
+  // share one bucket).
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.10' };
+  const res = await fetch(`${BASE}/api/feedback`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      message: 'Correction on the sample entry.',
+      name: 'Integration Tester',
+      email: 'tester@example.com',
+      articleSlug: 'welcome',
+    }),
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { ok: boolean; id: number };
+  assert.equal(body.ok, true);
+  assert.ok(Number.isInteger(body.id) && body.id > 0);
+});
+
+test('POST /api/feedback silently discards honeypot submissions', async () => {
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.11' };
+  const res = await fetch(`${BASE}/api/feedback`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message: 'spam', website: 'http://spam.example' }),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { ok: boolean };
+  assert.equal(body.ok, true);
+
+  // The honeypot submission must not appear in the inbox.
+  const inbox = await fetch(`${BASE}/api/feedback`, { headers: authHeaders() });
+  const inboxBody = (await inbox.json()) as { feedback: { message: string }[] };
+  assert.ok(!inboxBody.feedback.some((f) => f.message === 'spam'));
+});
+
+test('POST /api/feedback discards non-string honeypot values too', async () => {
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.12' };
+  for (const website of [true, 123, ['x'], { url: 'x' }]) {
+    const res = await fetch(`${BASE}/api/feedback`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ message: 'spam', website }),
+    });
+    assert.equal(res.status, 200, `honeypot value ${JSON.stringify(website)} should be discarded`);
+  }
+});
+
+test('POST /api/feedback rejects non-JSON content types with 415', async () => {
+  const headers = { 'content-type': 'text/plain', 'x-forwarded-for': '198.51.100.13' };
+  const res = await fetch(`${BASE}/api/feedback`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message: 'cross-origin spam' }),
+  });
+  assert.equal(res.status, 415);
+});
+
+test('POST /api/feedback strict rate limit holds even after priming via /api/search', async () => {
+  // The strict feedback bucket must not be primed away by the laxer default
+  // bucket: hit the public search endpoint first, then verify the feedback
+  // cap (5 / 10 min) still applies to the same client key.
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.99' };
+  const prime = await fetch(`${BASE}/api/search?q=sample`, { headers });
+  assert.equal(prime.status, 200);
+
+  let lastStatus = 0;
+  for (let i = 0; i < 6; i++) {
+    const res = await fetch(`${BASE}/api/feedback`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ message: `rate test ${i}` }),
+    });
+    lastStatus = res.status;
+    if (res.status === 429) break;
+  }
+  assert.equal(lastStatus, 429, '6th feedback submission should be rate limited');
+});
+
+test('POST /api/feedback rejects invalid bodies with 400', async () => {
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.14' };
+  const res = await fetch(`${BASE}/api/feedback`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message: '', email: 'not-an-email' }),
+  });
+  assert.equal(res.status, 400);
+  const body = (await res.json()) as { details?: string[] };
+  assert.ok(Array.isArray(body.details) && body.details.length > 0);
+});
+
+test('POST /api/feedback with a non-existent articleSlug still succeeds (no 500, no oracle)', async () => {
+  // The feedback table's FK rejects unknown slugs; the route must drop the
+  // association and store the feedback alone — uniformly 201, never a 500
+  // (and never a 400 that would reveal whether a slug exists).
+  const headers = { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.15' };
+  const res = await fetch(`${BASE}/api/feedback`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message: 'Feedback about a deleted article.', articleSlug: 'no-such-article' }),
+  });
+  assert.equal(res.status, 201);
+
+  const inbox = await fetch(`${BASE}/api/feedback`, { headers: authHeaders() });
+  const inboxBody = (await inbox.json()) as {
+    feedback: { message: string; articleSlug?: string }[];
+  };
+  const hit = inboxBody.feedback.find((f) => f.message === 'Feedback about a deleted article.');
+  assert.ok(hit, 'feedback should be stored');
+  assert.equal(hit.articleSlug, undefined, 'unknown slug must be dropped, not stored');
+});
+
+test('GET /api/feedback requires auth (401)', async () => {
+  const res = await fetch(`${BASE}/api/feedback`);
+  assert.equal(res.status, 401);
+});
+
+test('GET /api/feedback lists submissions with auth', async () => {
+  const res = await fetch(`${BASE}/api/feedback`, { headers: authHeaders() });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    feedback: { message: string; status: string; articleSlug?: string }[];
+  };
+  assert.ok(Array.isArray(body.feedback) && body.feedback.length > 0);
+  const hit = body.feedback.find((f) => f.message === 'Correction on the sample entry.');
+  assert.ok(hit, 'submitted feedback should be listed');
+  assert.equal(hit.status, 'new');
+  assert.equal(hit.articleSlug, 'welcome');
+});
+
+test('GET /api/feedback filters by status and rejects bad status', async () => {
+  const res = await fetch(`${BASE}/api/feedback?status=new`, { headers: authHeaders() });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { feedback: { status: string }[] };
+  assert.ok(body.feedback.every((f) => f.status === 'new'));
+
+  const bad = await fetch(`${BASE}/api/feedback?status=bogus`, { headers: authHeaders() });
+  assert.equal(bad.status, 400);
+});
+
+test('PATCH /api/feedback/{id} requires auth and updates status', async () => {
+  // Find a submission id first.
+  const inbox = await fetch(`${BASE}/api/feedback`, { headers: authHeaders() });
+  const inboxBody = (await inbox.json()) as { feedback: { id: number }[] };
+  const id = inboxBody.feedback[0].id;
+
+  const noAuth = await fetch(`${BASE}/api/feedback/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'acknowledged' }),
+  });
+  assert.equal(noAuth.status, 401);
+
+  const res = await fetch(`${BASE}/api/feedback/${id}`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({ status: 'acknowledged' }),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { feedback: { id: number; status: string } };
+  assert.equal(body.feedback.id, id);
+  assert.equal(body.feedback.status, 'acknowledged');
+});
+
+test('PATCH /api/feedback/{id} rejects bad id, bad status, and unknown id', async () => {
+  const badId = await fetch(`${BASE}/api/feedback/not-a-number`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({ status: 'new' }),
+  });
+  assert.equal(badId.status, 400);
+
+  const badStatus = await fetch(`${BASE}/api/feedback/1`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({ status: 'bogus' }),
+  });
+  assert.equal(badStatus.status, 400);
+
+  const unknown = await fetch(`${BASE}/api/feedback/999999`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({ status: 'new' }),
+  });
+  assert.equal(unknown.status, 404);
+});
+
+// ---------------------------------------------------------------------------
+// Hero images
+// ---------------------------------------------------------------------------
+
+// A small valid PNG generated with sharp (now a framework dependency).
+async function tinyPng(): Promise<Buffer> {
+  return sharp({ create: { width: 64, height: 32, channels: 3, background: '#336699' } })
+    .png()
+    .toBuffer();
+}
+
+test('POST /api/hero-images accepts a raw binary upload and serves it publicly', async () => {
+  const png = await tinyPng();
+  const res = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'content-type': 'image/png' },
+    body: png,
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as {
+    heroImage: { id: number; name: string; contentType: string; width: number; height: number };
+  };
+  assert.ok(Number.isInteger(body.heroImage.id) && body.heroImage.id > 0);
+  assert.equal(body.heroImage.contentType, 'image/webp', 'sources are re-encoded to webp');
+  assert.equal(body.heroImage.width, 64);
+  assert.equal(body.heroImage.height, 32);
+
+  // The public serving route returns the bytes.
+  const served = await fetch(`${BASE}/hero-images/${body.heroImage.id}`);
+  assert.equal(served.status, 200);
+  assert.equal(served.headers.get('content-type'), 'image/webp');
+  const bytes = new Uint8Array(await served.arrayBuffer());
+  assert.ok(bytes.length > 0);
+});
+
+test('POST /api/hero-images accepts base64 data (JSON transport)', async () => {
+  const png = await tinyPng();
+  const res = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ data: png.toString('base64'), name: 'base64 upload' }),
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { heroImage: { name: string } };
+  assert.equal(body.heroImage.name, 'base64-upload');
+});
+
+test('POST /api/hero-images requires auth (401)', async () => {
+  const png = await tinyPng();
+  const res = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: { 'content-type': 'image/png' },
+    body: png,
+  });
+  assert.equal(res.status, 401);
+});
+
+test('POST /api/hero-images rejects non-image bytes with 415', async () => {
+  const res = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'content-type': 'image/png' },
+    body: Buffer.from('this is not an image'),
+  });
+  assert.equal(res.status, 415);
+});
+
+test('POST /api/hero-images blocks SSRF targets (private/loopback URLs)', async () => {
+  const res = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ url: `http://127.0.0.1:${PORT}/api/articles` }),
+  });
+  assert.equal(res.status, 400);
+  const body = (await res.json()) as { error?: string };
+  assert.match(body.error ?? '', /private|loopback/i);
+});
+
+test('GET /api/hero-images lists metadata with auth and 401s without', async () => {
+  const noAuth = await fetch(`${BASE}/api/hero-images`);
+  assert.equal(noAuth.status, 401);
+
+  const res = await fetch(`${BASE}/api/hero-images`, { headers: authHeaders() });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { heroImages: { id: number; name: string }[] };
+  assert.ok(Array.isArray(body.heroImages) && body.heroImages.length > 0);
+  assert.ok(body.heroImages.some((h) => h.name === 'base64-upload'));
+});
+
+test('DELETE /api/hero-images/{id} removes an image and 404s on unknown', async () => {
+  // Upload one to delete.
+  const png = await tinyPng();
+  const created = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'content-type': 'image/png' },
+    body: png,
+  });
+  const { heroImage } = (await created.json()) as { heroImage: { id: number } };
+
+  const noAuth = await fetch(`${BASE}/api/hero-images/${heroImage.id}`, { method: 'DELETE' });
+  assert.equal(noAuth.status, 401);
+
+  const res = await fetch(`${BASE}/api/hero-images/${heroImage.id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  assert.equal(res.status, 200);
+
+  // Gone from the public route and the list.
+  const served = await fetch(`${BASE}/hero-images/${heroImage.id}`);
+  assert.equal(served.status, 404);
+
+  const unknown = await fetch(`${BASE}/api/hero-images/999999`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  assert.equal(unknown.status, 404);
+});
+
+test('uploaded hero images join the page rotation', async () => {
+  const png = await tinyPng();
+  const created = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'content-type': 'image/png' },
+    body: png,
+  });
+  assert.equal(created.status, 201);
+
+  // With DB-stored images present, the homepage hero must reference one of
+  // them (the rotation picks a random candidate per page load).
+  const html = await (await fetch(`${BASE}/`)).text();
+  assert.match(html, /\/hero-images\/\d+/, 'homepage should reference a DB-stored hero image');
 });

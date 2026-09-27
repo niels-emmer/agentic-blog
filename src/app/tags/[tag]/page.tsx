@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
 import { ArticleCard } from '@/components/ArticleCard';
+import { HeroVisual } from '@/components/HeroVisual';
+import { PageHero } from '@/components/PageHero';
 import { SiteFooter } from '@/components/SiteFooter';
 import { SiteHeader } from '@/components/SiteHeader';
 import { getArticlesForTag, getTagLabel } from '@/content/tags';
@@ -33,18 +35,15 @@ export default async function TagPage({ params }: { params: Promise<{ tag: strin
   const matches = getArticlesForTag(tag).filter((article) => article.status === 'published');
 
   return (
-    <div className="flex min-h-screen flex-col bg-ink">
-      <SiteHeader />
+    <div className="relative isolate flex min-h-screen flex-col bg-ink">
+      <HeroVisual />
+      <SiteHeader overlay />
       <main className="flex-1">
-        <section className="border-b border-white/10 px-6 py-16 sm:px-10">
-          <div className="mx-auto max-w-3xl">
-            <p className="font-mono text-xs uppercase tracking-[0.3em] text-signal">Tag</p>
-            <h1 className="mt-4 font-display text-3xl font-medium text-balance sm:text-4xl">{label}</h1>
-            <p className="mt-4 text-muted">
-              {matches.length} {matches.length === 1 ? 'article' : 'articles'}
-            </p>
-          </div>
-        </section>
+        <PageHero
+          kicker="Tag"
+          title={label}
+          subtitle={`${matches.length} ${matches.length === 1 ? 'article' : 'articles'}`}
+        />
 
         <section className="px-6 py-4 sm:px-10">
           <div className="mx-auto max-w-3xl">

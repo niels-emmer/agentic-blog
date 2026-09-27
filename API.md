@@ -4,9 +4,10 @@ Base URL: `http://localhost:3000` (local dev) or your deployed site URL
 Auth: Bearer token in the `Authorization` header — `Authorization: Bearer $CONTENT_API_TOKEN`
 
 The API is **disabled (503) until `CONTENT_API_TOKEN` is set**. All endpoints
-require the token **except `GET /api/search`**, which is public by design (it
-serves site readers). A machine-readable OpenAPI 3.0 spec is served at
-[`/openapi.json`](http://localhost:3000/openapi.json).
+require the token **except `GET /api/search`** (public by design — it serves
+site readers) and **`POST /api/feedback`** (the only unauthenticated write,
+protected by honeypot + rate limit — see below). A machine-readable OpenAPI
+3.0 spec is served at [`/openapi.json`](http://localhost:3000/openapi.json).
 
 Content is stored in SQLite. Publishing via the API updates the site
 **immediately** — no rebuild, no git push/pull.
@@ -242,15 +243,129 @@ Rate-limited like the content API (120 req/min per client IP), but on a
 separate bucket so reader search traffic can never exhaust the management
 API's quota.
 
+## POST /api/feedback
+
+Public feedback submission — **the only unauthenticated write on the site**.
+Serves the `/feedback` page form. Spam controls:
+
+- **Honeypot** — a hidden `website` field. Any non-empty value (of any type)
+  is silently accepted (`200 { ok: true }`) and **never stored**, so bots
+  cannot tell they were caught.
+- **Strict rate limit** — 5 submissions / 10 minutes / client IP (separate
+  bucket from the general API limit, so reader traffic cannot prime it away).
+- **Content-Type enforced** — non-`application/json` bodies are rejected with
+  415 (blocks CORS-safelisted `text/plain` cross-origin spam).
+- **Body cap** — 64 KB, enforced while streaming (413 on overflow).
+
+Body shape (all optional except `message`):
+
+```jsonc
+{
+  "message": "Correction on the welcome entry.",   // required, ≤ 5000 chars
+  "name": "Niels",                                  // optional, ≤ 100
+  "email": "niels@example.com",                     // optional, ≤ 200, must be valid
+  "articleSlug": "welcome",                         // optional, ≤ 100, [a-z0-9-]
+  "website": ""                                     // honeypot — leave empty
+}
+```
+
+Response: `201 { ok: true, id: 42 }`. Feedback is stored in SQLite and
+**never rendered on the site** — it is private to the operator.
+
+## GET /api/feedback
+
+List feedback submissions, newest first. **Token-gated** (bearer token
+required). Query params: `status` (optional: `new` | `acknowledged` |
+`archived`) and `limit` (optional, 1–100, default 50).
+
+```bash
+curl -H "Authorization: Bearer $CONTENT_API_TOKEN" \
+  "http://localhost:3000/api/feedback?status=new"
+```
+
+Response: `200 { feedback: [{ id, articleSlug?, name?, email?, message,
+status, createdAt }] }`.
+
+## PATCH /api/feedback/{id}
+
+Update a submission's status. **Token-gated**. Body: `{ "status": "new" |
+"acknowledged" | "archived" }`. Returns the updated row, or 404 for an
+unknown id.
+
+## POST /api/hero-images
+
+Add an image to the hero rotation stack. **Token-gated**. Three input modes:
+
+1. **Raw binary upload** — `Content-Type: image/jpeg|png|webp|gif|avif` with
+   the image bytes as the body.
+2. **URL** — JSON `{ "url": "https://…" }`. The server fetches it
+   (SSRF-guarded: private/loopback/link-local targets are rejected, redirects
+   are followed manually and each hop validated).
+3. **Base64** — JSON `{ "data": "<base64>", "name": "optional" }` for
+   JSON-only transports (e.g. MCP).
+
+Every source is **magic-byte validated** (the Content-Type header is never
+trusted), resized to ≤1920px on the longest edge, re-encoded to **webp**, and
+**stripped of metadata** (EXIF/GPS) before storage. Sources over 10 MB are
+rejected (413). The image is served publicly at `/hero-images/{id}` and joins
+the per-page rotation immediately.
+
+```bash
+# Binary upload
+curl -X POST http://localhost:3000/api/hero-images \
+  -H "Authorization: Bearer $CONTENT_API_TOKEN" \
+  -H "Content-Type: image/jpeg" --data-binary @photo.jpg
+
+# URL
+curl -X POST http://localhost:3000/api/hero-images \
+  -H "Authorization: Bearer $CONTENT_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/hero.jpg"}'
+
+# Base64 (JSON transport)
+curl -X POST http://localhost:3000/api/hero-images \
+  -H "Authorization: Bearer $CONTENT_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"data":"<base64>","name":"my hero"}'
+```
+
+Response: `201 { heroImage: { id, name, contentType, width, height,
+sizeBytes, createdAt } }`.
+
+## GET /api/hero-images
+
+List hero image metadata (id, name, dimensions, size, createdAt) — never the
+blobs. **Token-gated**.
+
+```bash
+curl -H "Authorization: Bearer $CONTENT_API_TOKEN" \
+  http://localhost:3000/api/hero-images
+```
+
+Response: `200 { heroImages: [...] }`.
+
+## DELETE /api/hero-images/{id}
+
+Permanently remove a hero image from the rotation stack. **Token-gated**.
+Irreversible. Returns 404 for an unknown id.
+
+## GET /hero-images/{id}
+
+Serves the stored image bytes. **Public by design** — the site renders these
+as page backgrounds. Long-lived cache header (images are immutable once
+stored).
+
 ## Errors
 
 | Status | Meaning |
 |--------|---------|
 | 400 | Invalid JSON or validation failed (`details` array in body) |
 | 401 | Missing or wrong bearer token |
-| 404 | Slug not found; feed disabled |
+| 404 | Slug not found; feed disabled; feedback id unknown; hero image id unknown |
 | 409 | Slug already exists (POST) |
-| 413 | Request body too large (site-config PATCH > 64 KB; import > 5 MB) |
+| 413 | Request body too large (site-config PATCH > 64 KB; import > 5 MB; feedback > 64 KB; hero image source > 10 MB) |
+| 415 | Non-JSON Content-Type (feedback POST); non-image bytes or unsupported type (hero images) |
+| 429 | Rate limited (feedback POST: 5/10min/IP) |
 | 503 | API not configured — `CONTENT_API_TOKEN` unset |
 
 ## Agent publishing (MCP)
@@ -258,6 +373,7 @@ API's quota.
 The preferred way for agents to publish/edit is the MCP server, which wraps
 this API with discoverable tools (`list_articles`, `get_article`,
 `search_articles`, `publish_article`, `update_article`, `delete_article`,
-`get_site_config`, `update_site_config`, `export_content`, `import_content`).
+`get_site_config`, `update_site_config`, `export_content`, `import_content`,
+`list_feedback`, `update_feedback_status`).
 See [`mcp-server/README.md`](mcp-server/README.md) for setup and connection
 details. MCP clients discover the tools automatically via `tools/list`.

@@ -443,6 +443,99 @@ function createServer() {
     },
   );
 
+  server.registerTool(
+    'list_feedback',
+    {
+      title: 'List feedback',
+      description:
+        'List feedback submissions, newest first. Optional status filter (new, acknowledged, archived) and limit (1-100, default 50). Feedback is private to the operator — never rendered on the site.',
+      inputSchema: {
+        status: z.enum(['new', 'acknowledged', 'archived']).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ status, limit }) => {
+      const qs = new URLSearchParams();
+      if (status) qs.set('status', status);
+      if (limit) qs.set('limit', String(limit));
+      const query = qs.toString();
+      const data = await api(`/api/feedback${query ? `?${query}` : ''}`);
+      return { content: [{ type: 'text', text: JSON.stringify(data.feedback, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    'update_feedback_status',
+    {
+      title: 'Update feedback status',
+      description:
+        'Mark a feedback submission as acknowledged or archived by its id. Use list_feedback to find ids.',
+      inputSchema: {
+        id: z.number().int().positive(),
+        status: z.enum(['new', 'acknowledged', 'archived']),
+      },
+    },
+    async ({ id, status }) => {
+      const data = await api(`/api/feedback/${id}`, { method: 'PATCH', body: { status } });
+      return { content: [{ type: 'text', text: JSON.stringify(data.feedback, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    'add_hero_image',
+    {
+      title: 'Add a hero background image',
+      description:
+        'Add an image to the hero rotation stack. Provide either a `url` (http/https — the server fetches it; private/loopback targets are rejected) or base64 `data` with an optional `name`. The image is validated, resized to at most 1920px on the longest edge, re-encoded to webp, and stripped of metadata before storage. It joins the per-page hero rotation immediately and is served publicly at /hero-images/{id}.',
+      inputSchema: {
+        url: z.string().url().refine((u) => u.startsWith('http://') || u.startsWith('https://'), 'url must be http(s)').optional(),
+        data: z.string().min(1).optional(),
+        name: z.string().min(1).max(100).optional(),
+      },
+    },
+    async ({ url, data, name }) => {
+      const body = url ? { url } : { data, ...(name ? { name } : {}) };
+      const result = await api('/api/hero-images', { method: 'POST', body });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Added hero image "${result.heroImage.name}" (${result.heroImage.width}x${result.heroImage.height}, ${result.heroImage.sizeBytes} bytes) at /hero-images/${result.heroImage.id}`,
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    'list_hero_images',
+    {
+      title: 'List hero background images',
+      description:
+        'List the hero images in the rotation stack: id, name, dimensions, size, and creation time. Use the id to delete one, or reference /hero-images/{id} for the public URL.',
+    },
+    async () => {
+      const data = await api('/api/hero-images');
+      return { content: [{ type: 'text', text: JSON.stringify(data.heroImages, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    'delete_hero_image',
+    {
+      title: 'Delete a hero background image',
+      description:
+        'Permanently remove a hero image from the rotation stack by its id (find ids via list_hero_images). Irreversible — confirm with the human operator before calling.',
+      inputSchema: {
+        id: z.number().int().positive(),
+      },
+    },
+    async ({ id }) => {
+      await api(`/api/hero-images/${id}`, { method: 'DELETE' });
+      return { content: [{ type: 'text', text: `Deleted hero image ${id}` }] };
+    },
+  );
+
   return server;
 }
 

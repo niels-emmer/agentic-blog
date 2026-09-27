@@ -41,8 +41,9 @@ CONTENT_API_URL=http://localhost:3000 CONTENT_API_TOKEN=<token> MCP_TOKEN=<token
 Next.js 15 App Router. Three routes render from a **SQLite database** via a
 repository layer — no static content module, no build-time data:
 
-- `/` (homepage), `/articles/[slug]`, `/tags/[tag]` — all server-rendered
-  on demand (`export const dynamic = 'force-dynamic'`), reading through
+- `/` (homepage), `/articles/[slug]`, `/tags/[tag]`, `/status/[status]`,
+  `/feedback` — all server-rendered on demand
+  (`export const dynamic = 'force-dynamic'`), reading through
   `src/lib/db.ts`.
 - **`src/lib/db.ts`** is the data layer: opens the SQLite file (path from
   `DB_PATH`, default `.data/agentic-blog.db`), creates the schema on first
@@ -51,39 +52,53 @@ repository layer — no static content module, no build-time data:
   `getArticle`, `createArticle`, `updateArticle` (full replace),
   `deleteArticle`, `importArticles` (merge-by-slug, transactional), plus
   `getSiteConfig` / `updateSiteConfig` (partial merge) for the single
-  `site_config` row.
+  `site_config` row, `createFeedback` / `listFeedback` /
+  `updateFeedbackStatus` for the `feedback` table, and
+  `createHeroImage` / `listHeroImages` / `getHeroImage` /
+  `deleteHeroImage` for the `hero_images` table (BLOB storage).
 - **Content model** — `Article` (see `src/content/articles.ts`): `slug`,
   `title`, `dek`, `logged`, optional `eventDate`, `status` (`draft` |
   `published` | `archived`), non-empty `tags` and `sections`, optional
   `sources` and `agentNotes`. Only `published` articles render on the public
-  site (homepage, article pages, tag pages, RSS feed); the API is the
-  management surface and returns every status.
+  site (homepage, article pages, tag pages, status pages, RSS feed); the API
+  is the management surface and returns every status.
 - **Site config** — a single `site_config` row (seeded with generic
   framework defaults; the scaffold overrides via `SITE_TITLE` / `SITE_URL` /
   `SITE_DESCRIPTION` env vars) drives the site chrome: metadata + robots
   (`src/app/layout.tsx` via `generateMetadata`), hero copy + homepage cap
-  (`src/app/page.tsx`), header title (`SiteHeader`), footer texts
-  (`SiteFooter`). `robots.txt` is served dynamically from `robotsIndex`
-  (`src/app/robots.ts`). Update via `PATCH /api/site-config` or the
-  `update_site_config` MCP tool; validation in `src/lib/validation.ts`
-  (`validateSiteConfig`).
+  (`src/app/page.tsx` — the homepage paginates at `homepageCap` per page via
+  `/?page=N`, canonicalizing later pages to `/`), header title
+  (`SiteHeader`), footer texts (`SiteFooter`). `robots.txt` is served
+  dynamically from `robotsIndex` (`src/app/robots.ts`). Update via
+  `PATCH /api/site-config` or the `update_site_config` MCP tool; validation
+  in `src/lib/validation.ts` (`validateSiteConfig`).
 - **Theme system** — the `theme` field of `site_config` (colors, fonts,
   `heroImageUrl`) is applied at runtime by `ThemeProvider`
   (`src/components/ThemeProvider.tsx`), which overrides Tailwind v4's CSS
   variables on `:root` (components use token classes, so no component
   changes). The default three fonts load via `next/font` at build time;
   other allow-listed fonts (see `src/lib/theme.ts` `FONT_MAP`) load at
-  runtime via Google Fonts `<link>`. `HeroVisual` renders `heroImageUrl`
-  (next/image for local paths, plain `<img>` for remote URLs, nothing when
-  empty). CSP in `next.config.ts` allows `fonts.googleapis.com` /
-  `fonts.gstatic.com` and `https:` images.
+  runtime via Google Fonts `<link>`. `HeroVisual` renders the hero
+  background at page level (next/image for local paths, plain `<img>` for
+  remote URLs, nothing when empty). When no explicit URL is passed it picks
+  a random candidate per page load (`src/lib/hero-image.ts`): DB-stored
+  images first (`/hero-images/{id}`), then `public/hero-bg-*` files, then
+  `theme.heroImageUrl`. CSP in `next.config.ts` allows
+  `fonts.googleapis.com` / `fonts.gstatic.com` and `https:` images.
+- **Hero image ingestion** — `src/lib/image-upload.ts` validates (magic
+  bytes, never the Content-Type header), resizes to ≤1920px via **sharp**
+  (the framework's one image dependency — MIT, prebuilt binaries for the
+  alpine Docker image), re-encodes to webp, and strips metadata (EXIF/GPS).
+  URL sources are SSRF-guarded (`isPrivateIp` blocks private/loopback/
+  link-local ranges; redirects followed manually, each hop validated).
 - **`src/content/tags.ts`** derives the tag registry from the database.
   `slugifyTag` lives in `src/lib/slugify.ts` (shared with the DB layer and
   API validation).
 - **Components** (`ArticleCard`, `ArticleBody`, `SiteHeader`, `SiteFooter`,
-  `TagMenu`, `HeroVisual`) are dumb renderers over the `Article` shape.
-  `TagMenu` is a client component and receives its tags as props from
-  `SiteHeader` (the client bundle never touches the database).
+  `TagMenu`, `HeroVisual`, `PageHero`, `Pagination`, `FeedbackForm`) are
+  dumb renderers over the `Article` shape. `TagMenu` and `FeedbackForm` are
+  client components and receive their data as props from server components
+  (the client bundle never touches the database).
 - **Content API** — `src/app/api/articles/route.ts` and
   `src/app/api/articles/[slug]/route.ts` expose GET/POST/PATCH/DELETE;
   `src/app/api/site-config/route.ts` exposes GET/PATCH for site config;
@@ -95,6 +110,22 @@ repository layer — no static content module, no build-time data:
   PATCH is full-replace; the body slug must match the URL slug. Site-config
   PATCH is a partial merge with a 64 KB body cap; import has a 5 MB cap and
   a 1000-entry cap.
+- **Feedback API** — `POST /api/feedback` is the **only unauthenticated
+  write**: honeypot field (any non-empty value silently discarded), strict
+  5/10min/IP rate limit, 415 on non-JSON content-type, 64 KB streaming body
+  cap. `GET /api/feedback` (status filter + limit) and
+  `PATCH /api/feedback/{id}` are token-gated. Feedback is stored in the
+  `feedback` table and never rendered on the site. Rate limiting
+  (`src/lib/rate-limit.ts`) supports per-endpoint `(max, windowMs)` buckets
+  keyed by `(key, max, windowMs)` so strict buckets cannot be primed away;
+  `clientKey` uses the last `X-Forwarded-For` hop behind `TRUST_PROXY=1`.
+- **Hero image API** — `POST /api/hero-images` (token-gated) accepts a raw
+  binary body (`Content-Type: image/*`), a JSON `{ url }` (SSRF-guarded
+  fetch), or JSON `{ data }` base64; every source goes through
+  `processImage` before storage. `GET /api/hero-images` lists metadata and
+  `DELETE /api/hero-images/{id}` removes an image (both token-gated). The
+  bytes are served publicly at `src/app/hero-images/[id]/route.ts` with a
+  long-lived cache header.
 - **RSS feed** — `src/app/feed.xml/route.ts` serves an RSS 2.0 feed
   generated by `src/lib/feed.ts` (pure function, XML-escaped). Config-gated
   by `feedEnabled` (default off — returns 404 when disabled); includes only
@@ -104,7 +135,9 @@ repository layer — no static content module, no build-time data:
 - **MCP server** — `mcp-server/` exposes the content API as MCP tools
   (`publish_article`, `update_article`, `delete_article`, `list_articles`,
   `get_article`, `search_articles`, `get_site_config`, `update_site_config`,
-  `export_content`, `import_content`) over Streamable HTTP. It is a thin HTTP
+  `export_content`, `import_content`, `list_feedback`,
+  `update_feedback_status`, `add_hero_image`, `list_hero_images`,
+  `delete_hero_image`) over Streamable HTTP. It is a thin HTTP
   client over the content API. Env vars: `CONTENT_API_URL`,
   `CONTENT_API_TOKEN`, `MCP_TOKEN` (mandatory on non-loopback binds — fail
   closed), `MCP_HOST`, `MCP_PORT`, `MCP_ALLOWED_HOSTS` (DNS-rebinding

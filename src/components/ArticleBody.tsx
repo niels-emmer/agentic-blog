@@ -3,7 +3,7 @@ import Link from 'next/link';
 import type { Article } from '@/content/articles';
 import { slugifyTag } from '@/content/tags';
 
-const statusLabel: Record<Article['status'], string> = {
+export const statusLabel: Record<Article['status'], string> = {
   draft: 'Draft',
   published: 'Published',
   archived: 'Archived',
@@ -11,7 +11,7 @@ const statusLabel: Record<Article['status'], string> = {
 
 export function ArticleBody({ article }: { article: Article }) {
   return (
-    <article className="px-6 py-16 sm:px-10">
+    <article className="px-6 pb-16 pt-10 sm:px-10">
       <div className="mx-auto max-w-3xl">
         <div className="flex flex-wrap items-center gap-3 font-mono text-xs text-muted">
           <span>logged {article.logged}</span>
@@ -21,10 +21,7 @@ export function ArticleBody({ article }: { article: Article }) {
               <span>{article.eventDate}</span>
             </>
           )}
-          <span className="text-signal">{statusLabel[article.status]}</span>
         </div>
-        <h1 className="mt-4 font-display text-3xl font-medium text-balance sm:text-4xl">{article.title}</h1>
-        <p className="mt-4 max-w-2xl text-lg text-muted">{article.dek}</p>
         <div className="mt-4 flex flex-wrap gap-2">
           {article.tags.map((tag) => (
             <Link

@@ -25,13 +25,28 @@ test('keys are isolated from each other', () => {
   assert.equal(checkRateLimit(b).limited, false);
 });
 
-test('clientKey prefers the first X-Forwarded-For hop when TRUST_PROXY=1', () => {
+test('a strict per-endpoint bucket is not primed away by a laxer one', () => {
+  const key = `strict-${Date.now()}`;
+  // Prime the laxer default bucket (120/window) past its cap.
+  for (let i = 0; i < 120; i++) checkRateLimit(key);
+  assert.equal(checkRateLimit(key).limited, true, 'default bucket should be exhausted');
+
+  // The strict bucket (5/window) is keyed separately and starts fresh.
+  const strict = checkRateLimit(key, { max: 5, windowMs: 600_000 });
+  assert.equal(strict.limited, false, 'strict bucket must not inherit the laxer cap');
+  for (let i = 0; i < 4; i++) checkRateLimit(key, { max: 5, windowMs: 600_000 });
+  assert.equal(checkRateLimit(key, { max: 5, windowMs: 600_000 }).limited, true);
+});
+
+test('clientKey prefers the last X-Forwarded-For hop when TRUST_PROXY=1', () => {
   process.env.TRUST_PROXY = '1';
   try {
+    // The proxy appends the real client address as the last hop; earlier
+    // hops are attacker-controlled and must not be used for keying.
     const request = new Request('http://localhost/api/x', {
       headers: { 'x-forwarded-for': '203.0.113.5, 10.0.0.1' },
     });
-    assert.equal(clientKey(request), '203.0.113.5');
+    assert.equal(clientKey(request), '10.0.0.1');
   } finally {
     delete process.env.TRUST_PROXY;
   }

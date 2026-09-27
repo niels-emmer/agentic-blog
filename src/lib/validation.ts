@@ -467,3 +467,94 @@ export function validateThemePatch(input: unknown): ThemeValidationResult {
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, value };
 }
+
+// ---------------------------------------------------------------------------
+// Feedback validation (public submissions)
+// ---------------------------------------------------------------------------
+
+const FEEDBACK_LIMITS = {
+  message: 5_000,
+  name: 100,
+  email: 200,
+  articleSlug: 100,
+} as const;
+
+const FEEDBACK_KEYS = ['message', 'name', 'email', 'articleSlug', 'website'] as const;
+
+export type FeedbackInput = {
+  articleSlug?: string;
+  name?: string;
+  email?: string;
+  message: string;
+};
+
+export type FeedbackValidationResult =
+  | { ok: true; value: FeedbackInput }
+  | { ok: false; errors: string[] };
+
+/**
+ * Validates a public feedback submission. `website` is the honeypot field —
+ * the caller strips it before storing (a non-empty value means a bot).
+ * Unknown fields are rejected.
+ */
+export function validateFeedback(input: unknown): FeedbackValidationResult {
+  const errors: string[] = [];
+
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    return { ok: false, errors: ['body must be a JSON object'] };
+  }
+  const o = input as Record<string, unknown>;
+
+  for (const key of Object.keys(o)) {
+    if (!(FEEDBACK_KEYS as readonly string[]).includes(key)) {
+      errors.push(`unknown field "${key}"`);
+    }
+  }
+
+  const value: FeedbackInput = { message: '' };
+
+  if (!isNonEmptyString(o.message)) {
+    errors.push('message is required');
+  } else if (o.message.trim().length > FEEDBACK_LIMITS.message) {
+    errors.push(`message must be at most ${FEEDBACK_LIMITS.message} characters`);
+  } else {
+    value.message = o.message.trim();
+  }
+
+  if (o.name !== undefined) {
+    if (typeof o.name !== 'string') {
+      errors.push('name must be a string');
+    } else if (o.name.trim().length > FEEDBACK_LIMITS.name) {
+      errors.push(`name must be at most ${FEEDBACK_LIMITS.name} characters`);
+    } else if (o.name.trim().length > 0) {
+      value.name = o.name.trim();
+    }
+  }
+
+  if (o.email !== undefined) {
+    if (typeof o.email !== 'string') {
+      errors.push('email must be a string');
+    } else if (o.email.trim().length > FEEDBACK_LIMITS.email) {
+      errors.push(`email must be at most ${FEEDBACK_LIMITS.email} characters`);
+    } else if (o.email.trim().length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.email.trim())) {
+      errors.push('email must be a valid email address');
+    } else if (o.email.trim().length > 0) {
+      value.email = o.email.trim();
+    }
+  }
+
+  if (o.articleSlug !== undefined) {
+    if (typeof o.articleSlug !== 'string') {
+      errors.push('articleSlug must be a string');
+    } else if (o.articleSlug.trim().length > FEEDBACK_LIMITS.articleSlug) {
+      errors.push(`articleSlug must be at most ${FEEDBACK_LIMITS.articleSlug} characters`);
+    } else if (o.articleSlug.trim().length > 0 && !/^[a-z0-9-]+$/.test(o.articleSlug.trim())) {
+      errors.push('articleSlug must be lowercase alphanumeric with hyphens only');
+    } else if (o.articleSlug.trim().length > 0) {
+      value.articleSlug = o.articleSlug.trim();
+    }
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value };
+}

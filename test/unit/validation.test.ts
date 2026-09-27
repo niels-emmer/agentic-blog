@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateArticle, validateSiteConfig, validateThemePatch } from '@/lib/validation';
+import { validateArticle, validateFeedback, validateSiteConfig, validateThemePatch } from '@/lib/validation';
 
 const validInput = {
   title: 'A test article',
@@ -223,4 +223,83 @@ test('validateSiteConfig accepts a theme patch and rejects a bad one', () => {
 
   const bad = validateSiteConfig({ theme: { fonts: { mono: 'Wingdings' } } });
   assert.equal(bad.ok, false);
+});
+
+// ---------------------------------------------------------------------------
+// Feedback validation
+// ---------------------------------------------------------------------------
+
+test('validateFeedback accepts a message-only submission', () => {
+  const result = validateFeedback({ message: 'Correction on the welcome entry.' });
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.value.message, 'Correction on the welcome entry.');
+    assert.equal(result.value.name, undefined);
+    assert.equal(result.value.email, undefined);
+    assert.equal(result.value.articleSlug, undefined);
+  }
+});
+
+test('validateFeedback accepts all optional fields and trims them', () => {
+  const result = validateFeedback({
+    message: '  A message  ',
+    name: '  Niels  ',
+    email: ' niels@example.com ',
+    articleSlug: 'welcome',
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.value.message, 'A message');
+    assert.equal(result.value.name, 'Niels');
+    assert.equal(result.value.email, 'niels@example.com');
+    assert.equal(result.value.articleSlug, 'welcome');
+  }
+});
+
+test('validateFeedback rejects a missing or empty message', () => {
+  for (const bad of [{}, { message: '' }, { message: '   ' }]) {
+    const result = validateFeedback(bad);
+    assert.equal(result.ok, false, `should reject ${JSON.stringify(bad)}`);
+    if (!result.ok) assert.ok(result.errors.some((e) => e.includes('message')));
+  }
+});
+
+test('validateFeedback rejects a message over 5000 characters', () => {
+  const result = validateFeedback({ message: 'a'.repeat(5001) });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.ok(result.errors.some((e) => e.includes('5000')));
+});
+
+test('validateFeedback rejects an invalid email', () => {
+  for (const bad of ['not-an-email', 'a@b', '@example.com', 'a b@example.com']) {
+    const result = validateFeedback({ message: 'hi', email: bad });
+    assert.equal(result.ok, false, `should reject email ${bad}`);
+    if (!result.ok) assert.ok(result.errors.some((e) => e.includes('email')));
+  }
+});
+
+test('validateFeedback rejects an invalid articleSlug', () => {
+  for (const bad of ['Bad Slug!', 'has space', 'UPPER', 'a'.repeat(101)]) {
+    const result = validateFeedback({ message: 'hi', articleSlug: bad });
+    assert.equal(result.ok, false, `should reject slug ${bad}`);
+  }
+});
+
+test('validateFeedback rejects unknown fields', () => {
+  const result = validateFeedback({ message: 'hi', spam: true });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.ok(result.errors.some((e) => e.includes('unknown field')));
+});
+
+test('validateFeedback accepts the honeypot field (stripped by the route)', () => {
+  const result = validateFeedback({ message: 'hi', website: 'http://spam.example' });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal('website' in result.value, false);
+});
+
+test('validateFeedback rejects a non-object body', () => {
+  for (const bad of [null, 'string', 42, [], undefined]) {
+    const result = validateFeedback(bad);
+    assert.equal(result.ok, false);
+  }
 });

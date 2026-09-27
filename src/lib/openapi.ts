@@ -3,12 +3,17 @@
  *
  * Served at /openapi.json so agents can discover the API contract without
  * probing. The spec is hand-maintained — the API surface is small and stable
- * (6 paths), so a generated spec would be disproportionate effort.
+ * (11 paths), so a generated spec would be disproportionate effort.
  *
  * Keep this in sync with:
  *   - src/app/api/articles/route.ts
  *   - src/app/api/articles/[slug]/route.ts
  *   - src/app/api/search/route.ts
+ *   - src/app/api/feedback/route.ts
+ *   - src/app/api/feedback/[id]/route.ts
+ *   - src/app/api/hero-images/route.ts
+ *   - src/app/api/hero-images/[id]/route.ts
+ *   - src/app/hero-images/[id]/route.ts
  *   - src/lib/validation.ts
  */
 
@@ -55,6 +60,66 @@ const bearerAuth = {
   scheme: 'bearer',
   description:
     'Bearer token set via the CONTENT_API_TOKEN env var. The API returns 503 when the token is unset, 401 on missing/wrong token.',
+} as const;
+
+const feedbackSchema = {
+  type: 'object',
+  required: ['id', 'message', 'status', 'createdAt'],
+  properties: {
+    id: { type: 'integer', description: 'Feedback id (used to update status)' },
+    articleSlug: { type: 'string', description: 'Optional slug of the article the feedback is about' },
+    name: { type: 'string', description: 'Optional submitter name' },
+    email: { type: 'string', description: 'Optional submitter email (only used to reply)' },
+    message: { type: 'string', description: 'The feedback message' },
+    status: { type: 'string', enum: ['new', 'acknowledged', 'archived'] },
+    createdAt: { type: 'string', description: 'ISO timestamp of the submission' },
+  },
+} as const;
+
+const feedbackSubmissionSchema = {
+  type: 'object',
+  required: ['message'],
+  properties: {
+    message: { type: 'string', minLength: 1, maxLength: 5000, description: 'The feedback message (required)' },
+    name: { type: 'string', maxLength: 100, description: 'Optional' },
+    email: { type: 'string', maxLength: 200, description: 'Optional; must be a valid email address' },
+    articleSlug: { type: 'string', maxLength: 100, pattern: '^[a-z0-9-]+$', description: 'Optional slug of the article the feedback is about' },
+    website: { type: 'string', description: 'Honeypot — must be left empty. Non-empty values are silently discarded and never stored.' },
+  },
+} as const;
+
+const heroImageSchema = {
+  type: 'object',
+  required: ['id', 'name', 'contentType', 'width', 'height', 'sizeBytes', 'createdAt'],
+  properties: {
+    id: { type: 'integer', description: 'Hero image id (served publicly at /hero-images/{id})' },
+    name: { type: 'string', description: 'Source name (sanitized)' },
+    contentType: { type: 'string', description: 'Always image/webp — sources are re-encoded on ingest' },
+    width: { type: 'integer', description: 'Width after resize (≤ 1920)' },
+    height: { type: 'integer', description: 'Height after resize (≤ 1920)' },
+    sizeBytes: { type: 'integer', description: 'Stored size in bytes' },
+    createdAt: { type: 'string', description: 'ISO timestamp of the upload' },
+  },
+} as const;
+
+const heroImageUploadSchema = {
+  oneOf: [
+    {
+      type: 'object',
+      required: ['url'],
+      properties: {
+        url: { type: 'string', description: 'http(s) URL to fetch (SSRF-guarded: private/loopback targets rejected)' },
+      },
+    },
+    {
+      type: 'object',
+      required: ['data'],
+      properties: {
+        data: { type: 'string', description: 'Base64-encoded image bytes' },
+        name: { type: 'string', description: 'Optional source name' },
+      },
+    },
+  ],
 } as const;
 
 const siteConfigSchema = {
@@ -119,7 +184,7 @@ export const openApiSpec = {
     title: 'Agentic Blog — Content API',
     version: '0.1.0',
     description:
-      'Publish, edit, and delete articles on an Agentic Blog. Content is stored in SQLite and the site reflects changes immediately — no rebuild required. All endpoints require a bearer token except GET /api/search, which is public for site readers.',
+      'Publish, edit, and delete articles on an Agentic Blog. Content is stored in SQLite and the site reflects changes immediately — no rebuild required. All endpoints require a bearer token except GET /api/search and POST /api/feedback, which are public for site readers.',
   },
   servers: [{ url: '/' }],
   paths: {
@@ -440,9 +505,222 @@ status: { type: 'string', enum: ['published'], description: 'Always published �
         },
       },
     },
+    '/api/feedback': {
+      post: {
+        summary: 'Submit feedback (public)',
+        description:
+          'Public feedback submission — the only unauthenticated write on the site. No bearer token required. Spam controls: a hidden `website` honeypot field (filled values are silently accepted and never stored) and a strict rate limit (5 submissions / 10 min / client IP). Stores the message in SQLite.',
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: feedbackSubmissionSchema } },
+        },
+        responses: {
+          '201': {
+            description: 'Created',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { ok: { type: 'boolean' }, id: { type: 'integer' } },
+                },
+              },
+            },
+          },
+          '400': { description: 'Validation failed (details in response body)' },
+          '413': { description: 'Request body too large (> 64 KB)' },
+          '415': { description: 'Content-Type must be application/json' },
+          '429': { description: 'Rate limited (5 / 10 min / IP)' },
+        },
+      },
+      get: {
+        summary: 'List feedback submissions',
+        description:
+          'List feedback submissions, newest first. Token-gated — feedback is private to the operator and never rendered on the site.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'status',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', enum: ['new', 'acknowledged', 'archived'] },
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', minimum: 1, maximum: 100 },
+            description: 'Max results (default 50)',
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { feedback: { type: 'array', items: feedbackSchema } },
+                },
+              },
+            },
+          },
+          '400': { description: 'Invalid status filter' },
+          '401': { description: 'Missing or invalid bearer token' },
+          '429': { description: 'Rate limited' },
+          '503': { description: 'API not configured (CONTENT_API_TOKEN unset)' },
+        },
+      },
+    },
+    '/api/feedback/{id}': {
+      patch: {
+        summary: 'Update feedback status',
+        description:
+          'Mark a feedback submission as acknowledged or archived. Token-gated.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['status'],
+                properties: {
+                  status: { type: 'string', enum: ['new', 'acknowledged', 'archived'] },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { feedback: feedbackSchema },
+                },
+              },
+            },
+          },
+          '400': { description: 'Invalid id or status' },
+          '401': { description: 'Missing or invalid bearer token' },
+          '404': { description: 'Not found' },
+          '503': { description: 'API not configured (CONTENT_API_TOKEN unset)' },
+        },
+      },
+    },
+    '/api/hero-images': {
+      post: {
+        summary: 'Add a hero background image',
+        description:
+          'Adds an image to the hero rotation stack. Token-gated. Three input modes: a raw binary body with Content-Type image/*, JSON { url } (the server fetches it — SSRF-guarded, private/loopback targets rejected), or JSON { data } with base64 bytes (for JSON-only transports like MCP). Every source is magic-byte validated, resized to ≤1920px on the longest edge, re-encoded to webp, and stripped of metadata (EXIF/GPS) before storage. The image is served publicly at /hero-images/{id} and joins the per-page rotation immediately.',
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: heroImageUploadSchema },
+            'image/jpeg': { schema: { type: 'string', format: 'binary' } },
+            'image/png': { schema: { type: 'string', format: 'binary' } },
+            'image/webp': { schema: { type: 'string', format: 'binary' } },
+            'image/gif': { schema: { type: 'string', format: 'binary' } },
+            'image/avif': { schema: { type: 'string', format: 'binary' } },
+          },
+        },
+        responses: {
+          '201': {
+            description: 'Created',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { heroImage: heroImageSchema },
+                },
+              },
+            },
+          },
+          '400': { description: 'Invalid body, unreadable image, or SSRF-blocked URL' },
+          '401': { description: 'Missing or invalid bearer token' },
+          '413': { description: 'Image source exceeds 10 MB' },
+          '415': { description: 'Unsupported content type or non-image bytes' },
+          '429': { description: 'Rate limited' },
+          '503': { description: 'API not configured (CONTENT_API_TOKEN unset)' },
+        },
+      },
+      get: {
+        summary: 'List hero background images',
+        description:
+          'Lists hero image metadata (id, name, dimensions, size, createdAt) — never the blobs. Token-gated.',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { heroImages: { type: 'array', items: heroImageSchema } },
+                },
+              },
+            },
+          },
+          '401': { description: 'Missing or invalid bearer token' },
+          '429': { description: 'Rate limited' },
+          '503': { description: 'API not configured (CONTENT_API_TOKEN unset)' },
+        },
+      },
+    },
+    '/api/hero-images/{id}': {
+      delete: {
+        summary: 'Remove a hero background image',
+        description:
+          'Permanently removes a hero image from the rotation stack. Token-gated. Irreversible.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+              },
+            },
+          },
+          '400': { description: 'Invalid id' },
+          '401': { description: 'Missing or invalid bearer token' },
+          '404': { description: 'Not found' },
+          '503': { description: 'API not configured (CONTENT_API_TOKEN unset)' },
+        },
+      },
+    },
+    '/hero-images/{id}': {
+      get: {
+        summary: 'Fetch a hero image (public)',
+        description:
+          'Serves the stored image bytes. Public by design — the site renders these as page backgrounds. Long-lived cache header (images are immutable once stored).',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+        responses: {
+          '200': {
+            description: 'OK',
+            content: {
+              'image/webp': { schema: { type: 'string', format: 'binary' } },
+            },
+          },
+          '404': { description: 'Not found' },
+        },
+      },
+    },
   },
   components: {
     securitySchemes: { bearerAuth },
-    schemas: { Article: articleSchema, SiteConfig: siteConfigSchema },
+    schemas: {
+      Article: articleSchema,
+      SiteConfig: siteConfigSchema,
+      Feedback: feedbackSchema,
+      FeedbackSubmission: feedbackSubmissionSchema,
+      HeroImage: heroImageSchema,
+      HeroImageUpload: heroImageUploadSchema,
+    },
   },
 } as const;
