@@ -7,6 +7,11 @@ versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Nothing yet.
+
+## [1.1.0] — 2026-09-27
+
+### Added
 - Hero background rotation: every page renders a hero background picked at
   request time from DB-stored images (managed via the API/MCP) or
   `public/hero-bg-*` files, falling back to `theme.heroImageUrl`. Hero
