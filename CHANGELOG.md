@@ -7,7 +7,62 @@ versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Nothing yet.
+- Hero background rotation: every page renders a hero background picked at
+  request time from DB-stored images (managed via the API/MCP) or
+  `public/hero-bg-*` files, falling back to `theme.heroImageUrl`. Hero
+  visual on every page (article, tag, status) via a new `PageHero`.
+- Hero image CRUD: token-gated `POST/GET /api/hero-images` and
+  `DELETE /api/hero-images/{id}` (raw binary upload, SSRF-guarded URL
+  fetch, or base64), with magic-byte validation, resize to ≤1920px,
+  re-encoding to webp, and metadata stripping via **sharp** (the
+  framework's first image dependency). Public bytes at `/hero-images/{id}`.
+  MCP tools `add_hero_image`, `list_hero_images`, `delete_hero_image`.
+- Homepage pagination at `homepageCap` per page (`/?page=N`), canonicalizing
+  later pages to `/`.
+- Status index pages (`/status/draft|published|archived`) and a search-first
+  fold-out menu with a "Show only" section.
+- Public feedback form at `/feedback` with a token-gated inbox:
+  `POST /api/feedback` (the only unauthenticated write — honeypot, strict
+  5/10min/IP rate limit, 415 on non-JSON, 64 KB body cap),
+  `GET /api/feedback` and `PATCH /api/feedback/{id}` (token-gated). MCP
+  tools `list_feedback`, `update_feedback_status`.
+- `engines.node >= 22.5.0` in package.json to enforce the documented Node
+  requirement.
+
+### Changed
+- Rate limiter supports per-endpoint `(max, windowMs)` buckets keyed by
+  `(key, max, windowMs)` so strict buckets cannot be primed away; `clientKey`
+  uses the last `X-Forwarded-For` hop behind `TRUST_PROXY=1`. The window map
+  is capped (oldest-first eviction) and `TRUST_PROXY=1` logs a startup
+  warning.
+- Homepage "Articles" heading replaced with a divider; menu search box no
+  longer auto-focuses (mobile keyboard stays closed on open).
+
+### Fixed
+- Dockerfile chowns `/app/.next` so the Next image optimizer cache is
+  writable by the unprivileged node user (EACCES on every optimized image).
+- `POST /api/feedback` no longer 500s on a non-existent `articleSlug` (the
+  association is dropped, response is uniformly 201 — no slug-existence
+  oracle).
+- Status pages 404 on prototype keys (`/status/__proto__` etc.) via
+  `Object.hasOwn`.
+- `PATCH /api/feedback/{id}` reads the body with a 1 KB cap.
+- Regenerated `package-lock.json` (sharp was out of sync with
+  `package.json`, breaking `npm ci` in the Docker build).
+
+### Security
+- SSRF guard on hero-image URL sources: private/loopback/link-local targets
+  rejected (incl. IPv4-mapped IPv6), redirects followed manually with each
+  hop validated, 10 MB source cap, decompression-bomb pixel cap.
+- Feedback POST content-type check is an exact `application/json` match
+  (allowing charset), not a substring match.
+
+### Documentation
+- README homepage screenshot refreshed; Direct HTTP endpoint list expanded
+  to the full set (articles, site-config, export/import, feedback, hero
+  images). AGENTS.md, API.md, CLAUDE.md, mcp-server/README.md, and the
+  OpenAPI spec updated for hero rotation, hero image CRUD, pagination,
+  status pages, and feedback.
 
 ## [1.0.0] — 2026-09-20
 
