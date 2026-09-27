@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import sharp from 'sharp';
 
 /**
  * Integration layer: builds (via `npm run test:integration`) and starts the
@@ -813,4 +814,137 @@ test('PATCH /api/feedback/{id} rejects bad id, bad status, and unknown id', asyn
     body: JSON.stringify({ status: 'new' }),
   });
   assert.equal(unknown.status, 404);
+});
+
+// ---------------------------------------------------------------------------
+// Hero images
+// ---------------------------------------------------------------------------
+
+// A small valid PNG generated with sharp (now a framework dependency).
+async function tinyPng(): Promise<Buffer> {
+  return sharp({ create: { width: 64, height: 32, channels: 3, background: '#336699' } })
+    .png()
+    .toBuffer();
+}
+
+test('POST /api/hero-images accepts a raw binary upload and serves it publicly', async () => {
+  const png = await tinyPng();
+  const res = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'content-type': 'image/png' },
+    body: png,
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as {
+    heroImage: { id: number; name: string; contentType: string; width: number; height: number };
+  };
+  assert.ok(Number.isInteger(body.heroImage.id) && body.heroImage.id > 0);
+  assert.equal(body.heroImage.contentType, 'image/webp', 'sources are re-encoded to webp');
+  assert.equal(body.heroImage.width, 64);
+  assert.equal(body.heroImage.height, 32);
+
+  // The public serving route returns the bytes.
+  const served = await fetch(`${BASE}/hero-images/${body.heroImage.id}`);
+  assert.equal(served.status, 200);
+  assert.equal(served.headers.get('content-type'), 'image/webp');
+  const bytes = new Uint8Array(await served.arrayBuffer());
+  assert.ok(bytes.length > 0);
+});
+
+test('POST /api/hero-images accepts base64 data (JSON transport)', async () => {
+  const png = await tinyPng();
+  const res = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ data: png.toString('base64'), name: 'base64 upload' }),
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { heroImage: { name: string } };
+  assert.equal(body.heroImage.name, 'base64-upload');
+});
+
+test('POST /api/hero-images requires auth (401)', async () => {
+  const png = await tinyPng();
+  const res = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: { 'content-type': 'image/png' },
+    body: png,
+  });
+  assert.equal(res.status, 401);
+});
+
+test('POST /api/hero-images rejects non-image bytes with 415', async () => {
+  const res = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'content-type': 'image/png' },
+    body: Buffer.from('this is not an image'),
+  });
+  assert.equal(res.status, 415);
+});
+
+test('POST /api/hero-images blocks SSRF targets (private/loopback URLs)', async () => {
+  const res = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ url: `http://127.0.0.1:${PORT}/api/articles` }),
+  });
+  assert.equal(res.status, 400);
+  const body = (await res.json()) as { error?: string };
+  assert.match(body.error ?? '', /private|loopback/i);
+});
+
+test('GET /api/hero-images lists metadata with auth and 401s without', async () => {
+  const noAuth = await fetch(`${BASE}/api/hero-images`);
+  assert.equal(noAuth.status, 401);
+
+  const res = await fetch(`${BASE}/api/hero-images`, { headers: authHeaders() });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { heroImages: { id: number; name: string }[] };
+  assert.ok(Array.isArray(body.heroImages) && body.heroImages.length > 0);
+  assert.ok(body.heroImages.some((h) => h.name === 'base64-upload'));
+});
+
+test('DELETE /api/hero-images/{id} removes an image and 404s on unknown', async () => {
+  // Upload one to delete.
+  const png = await tinyPng();
+  const created = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'content-type': 'image/png' },
+    body: png,
+  });
+  const { heroImage } = (await created.json()) as { heroImage: { id: number } };
+
+  const noAuth = await fetch(`${BASE}/api/hero-images/${heroImage.id}`, { method: 'DELETE' });
+  assert.equal(noAuth.status, 401);
+
+  const res = await fetch(`${BASE}/api/hero-images/${heroImage.id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  assert.equal(res.status, 200);
+
+  // Gone from the public route and the list.
+  const served = await fetch(`${BASE}/hero-images/${heroImage.id}`);
+  assert.equal(served.status, 404);
+
+  const unknown = await fetch(`${BASE}/api/hero-images/999999`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  assert.equal(unknown.status, 404);
+});
+
+test('uploaded hero images join the page rotation', async () => {
+  const png = await tinyPng();
+  const created = await fetch(`${BASE}/api/hero-images`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'content-type': 'image/png' },
+    body: png,
+  });
+  assert.equal(created.status, 201);
+
+  // With DB-stored images present, the homepage hero must reference one of
+  // them (the rotation picks a random candidate per page load).
+  const html = await (await fetch(`${BASE}/`)).text();
+  assert.match(html, /\/hero-images\/\d+/, 'homepage should reference a DB-stored hero image');
 });

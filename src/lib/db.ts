@@ -108,6 +108,17 @@ function migrate(db: DatabaseSync): void {
       created_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS hero_images (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      name         TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      width        INTEGER NOT NULL,
+      height       INTEGER NOT NULL,
+      size_bytes   INTEGER NOT NULL,
+      data         BLOB NOT NULL,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS site_config (
       id                INTEGER PRIMARY KEY CHECK (id = 1),
       site_title        TEXT NOT NULL,
@@ -131,6 +142,7 @@ function migrate(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_article_tags_tag ON article_tags(tag_slug);
     CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
     CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at);
+    CREATE INDEX IF NOT EXISTS idx_hero_images_created ON hero_images(created_at);
 
     -- Full-text search index (FTS5). 'slug' is UNINDEXED (join key only);
     -- 'body' is the denormalized concatenation of section headings and
@@ -917,4 +929,90 @@ export function updateFeedbackStatus(id: number, status: FeedbackStatus): Feedba
     | FeedbackRow
     | undefined;
   return row ? rowToFeedback(row) : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Hero images (stored in SQLite so they survive container rebuilds on /data)
+// ---------------------------------------------------------------------------
+
+export interface HeroImage {
+  id: number;
+  name: string;
+  contentType: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+interface HeroImageRow {
+  id: number;
+  name: string;
+  content_type: string;
+  width: number;
+  height: number;
+  size_bytes: number;
+  data: Uint8Array;
+  created_at: string;
+}
+
+function rowToHeroImage(row: HeroImageRow): HeroImage {
+  return {
+    id: row.id,
+    name: row.name,
+    contentType: row.content_type,
+    width: row.width,
+    height: row.height,
+    sizeBytes: row.size_bytes,
+    createdAt: row.created_at,
+  };
+}
+
+/** Store a resized hero image. Returns the metadata (without the blob). */
+export function createHeroImage(input: {
+  name: string;
+  contentType: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  data: Uint8Array;
+}): HeroImage {
+  const database = getDb();
+  const { lastInsertRowid } = database
+    .prepare(
+      `INSERT INTO hero_images (name, content_type, width, height, size_bytes, data)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(input.name, input.contentType, input.width, input.height, input.sizeBytes, input.data);
+  const row = database.prepare('SELECT * FROM hero_images WHERE id = ?').get(lastInsertRowid) as unknown as
+    | HeroImageRow
+    | undefined;
+  if (!row) throw new Error('hero image row not found after insert');
+  return rowToHeroImage(row);
+}
+
+/** List hero image metadata, oldest first. Never returns the blob. */
+export function listHeroImages(): HeroImage[] {
+  const database = getDb();
+  const rows = database
+    .prepare('SELECT id, name, content_type, width, height, size_bytes, created_at FROM hero_images ORDER BY id ASC')
+    .all() as unknown as Omit<HeroImageRow, 'data'>[];
+  return rows.map((row) => rowToHeroImage(row as HeroImageRow));
+}
+
+/** Fetch a hero image's full row (including the blob) by id. */
+export function getHeroImage(id: number): (HeroImage & { data: Uint8Array }) | undefined {
+  const database = getDb();
+  const row = database.prepare('SELECT * FROM hero_images WHERE id = ?').get(id) as unknown as
+    | HeroImageRow
+    | undefined;
+  if (!row) return undefined;
+  return { ...rowToHeroImage(row), data: row.data };
+}
+
+/** Delete a hero image by id. Returns true if a row was removed. */
+export function deleteHeroImage(id: number): boolean {
+  const database = getDb();
+  const result = database.prepare('DELETE FROM hero_images WHERE id = ?').run(id);
+  return result.changes > 0;
 }

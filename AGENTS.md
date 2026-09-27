@@ -48,7 +48,8 @@ for content changes. Publish/edit/delete via the content API or the MCP server
   `publish_article`, `update_article`, `delete_article`, `list_articles`,
   `get_article`, `search_articles`, `get_site_config`, `update_site_config`,
   `export_content`, `import_content`, `list_feedback`,
-  `update_feedback_status`. See `mcp-server/README.md`.
+  `update_feedback_status`, `add_hero_image`, `list_hero_images`,
+  `delete_hero_image`. See `mcp-server/README.md`.
 - **Article shape** → `src/content/articles.ts` (types only). `status` is
   `draft` | `published` | `archived`; only `published` articles render on the
   public site (homepage, article pages, tag pages, status pages, RSS feed) —
@@ -63,10 +64,16 @@ for content changes. Publish/edit/delete via the content API or the MCP server
   `update_site_config`. `robotsIndex` defaults false (private posture);
   `feedEnabled` defaults off (`/feed.xml` 404s).
 - **Hero background rotation** → every page renders a hero background picked
-  at request time from any `public/hero-bg-*` image (jpg/png/webp/avif/gif).
-  Dropping a new file into `public/` makes it a candidate — no code change.
-  Falls back to `theme.heroImageUrl` when no candidates exist (empty by
-  default → gradient overlays only). See `src/lib/hero-image.ts`.
+  at request time from two sources, in order: **DB-stored images** (managed
+  via the token-gated `POST/GET/DELETE /api/hero-images` or the MCP tools
+  `add_hero_image` / `list_hero_images` / `delete_hero_image`; stored in
+  SQLite so they survive container rebuilds, served publicly at
+  `/hero-images/{id}`) and **`public/hero-bg-*` files** (dropping a new file
+  into `public/` makes it a candidate — no code change). Falls back to
+  `theme.heroImageUrl` when neither source has candidates (empty by default →
+  gradient overlays only). Uploads are magic-byte validated, resized to
+  ≤1920px, re-encoded to webp, and stripped of metadata; URL sources are
+  SSRF-guarded. See `src/lib/hero-image.ts` and `src/lib/image-upload.ts`.
 - **Export/import** → `GET /api/export` / `POST /api/import` (merge-by-slug
   upsert, transactional, never deletes unless `deleteMissing: true`).
 - **Feedback** → public `/feedback` page + `POST /api/feedback` (the only

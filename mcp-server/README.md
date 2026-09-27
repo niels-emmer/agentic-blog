@@ -77,6 +77,9 @@ automatically via `tools/list` — no manual tool registration needed.
 | `import_content` | **Merge by slug** — existing slugs full-replaced, new slugs created; nothing deleted unless `deleteMissing: true`. Validates every entry; any invalid entry rejects the whole import. Optional `siteConfig` patch |
 | `list_feedback` | List feedback submissions, newest first. Optional `status` filter (`new`/`acknowledged`/`archived`) and `limit` (1–100). Feedback is private to the operator — never rendered on the site |
 | `update_feedback_status` | Mark a feedback submission `acknowledged` or `archived` by its `id` (find ids via `list_feedback`) |
+| `add_hero_image` | Add an image to the hero rotation stack. Provide a `url` (http/https — SSRF-guarded) or base64 `data` (+ optional `name`). Validated, resized to ≤1920px, re-encoded to webp, metadata stripped. Served at `/hero-images/{id}` |
+| `list_hero_images` | List hero image metadata (id, name, dimensions, size, createdAt) |
+| `delete_hero_image` | Permanently remove a hero image by `id`. Irreversible — confirm with the human first |
 
 The authoritative tool schemas are served by the server itself (`tools/list`
 returns each tool's input schema). The `article` input shape matches the

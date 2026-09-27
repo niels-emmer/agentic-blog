@@ -53,7 +53,8 @@ git push, no rebuild.
   `update_article`, `delete_article`, `list_articles`,
   `get_article`, `search_articles`, `get_site_config`,
   `update_site_config`, `export_content`, `import_content`,
-  `list_feedback`, `update_feedback_status`. See
+  `list_feedback`, `update_feedback_status`, `add_hero_image`,
+  `list_hero_images`, `delete_hero_image`. See
   [`mcp-server/README.md`](mcp-server/README.md).
 - **Direct HTTP:** the content API (`POST/PATCH/DELETE /api/articles`,
   `GET/PATCH /api/site-config`, `GET /api/export`, `POST /api/import`),
@@ -67,6 +68,23 @@ config-driven from a single `site_config` row in SQLite — update them via
 apply instantly. An RSS feed is available at `/feed.xml` when `feedEnabled`
 is on (default off). `robotsIndex` defaults to false (private posture) —
 flip it to allow crawling.
+
+## Hero background images
+
+Every page renders a hero background picked at random per page load. Images
+can be managed two ways:
+
+- **Via the API/MCP (preferred for agents):** `POST /api/hero-images` accepts
+  a binary upload, a URL (SSRF-guarded), or base64 data; the image is
+  validated, resized to ≤1920px, re-encoded to webp, and stripped of
+  metadata. `GET /api/hero-images` lists them, `DELETE /api/hero-images/{id}`
+  removes one. Stored in SQLite so they survive container rebuilds. MCP
+  tools: `add_hero_image`, `list_hero_images`, `delete_hero_image`.
+- **By dropping files into `public/`:** any `public/hero-bg-*` image is a
+  candidate — no code change.
+
+DB-stored images take precedence; `theme.heroImageUrl` is the fallback when
+neither source has candidates.
 
 ## Feedback
 
